@@ -29,6 +29,8 @@ The truecased file can be found in `cv/wiki_lstm_700hidden_3layer/output.txt`. F
 python word_eval.py <gold file> <output file>
 ```
 
+forked from: https://github.com/karpathy/char-rnn/commit/106a75c6e2fc64eaf69290871e7231466c6c139e
+
 # char-rnn (original docs)
 
 This code implements **multi-layer Recurrent Neural Network** (RNN, LSTM, and GRU) for training/sampling from character-level language models. In other words the model takes one text file as input and trains a Recurrent Neural Network that learns to predict the next character in a sequence. The RNN can then be used to genrate text character by character that will look like the original training data. The context of this code base is described in detail in my [blog post](http://karpathy.github.io/2015/05/21/rnn-effectiveness/).
@@ -37,12 +39,12 @@ If you are new to Torch/Lua/Neural Nets, it might be helpful to know that this c
 
 ## Requirements
 
-This code is written in Lua and requires [Torch](http://torch.ch/). If you're on Ubuntu, installing Torch in your home directory may look something like: 
+This code is written in Lua and requires [Torch](http://torch.ch/). If you're on Ubuntu, installing Torch in your home directory may look something like:
 
 ```bash
 $ curl -s https://raw.githubusercontent.com/torch/ezinstall/master/install-deps | bash
 $ git clone https://github.com/torch/distro.git ~/torch --recursive
-$ cd ~/torch; 
+$ cd ~/torch;
 $ ./install.sh      # and enter "yes" at the end to modify your bashrc
 $ source ~/.bashrc
 ```
@@ -50,7 +52,7 @@ $ source ~/.bashrc
 See the Torch installation documentation for more details. After Torch is installed we need to get a few more packages using [LuaRocks](https://luarocks.org/) (which already came with the Torch install). In particular:
 
 ```bash
-$ luarocks install nngraph 
+$ luarocks install nngraph
 $ luarocks install optim
 $ luarocks install nn
 ```
@@ -111,7 +113,7 @@ Make sure that if your checkpoint was trained with GPU it is also sampled from w
 
 **Temperature**. An important parameter you may want to play with is `-temperature`, which takes a number in range \(0, 1\] (0 not included), default = 1. The temperature is dividing the predicted log probabilities before the Softmax, so lower temperature will cause the model to make more likely, but also more boring and conservative predictions. Higher temperatures cause the model to take more chances and increase diversity of results, but at a cost of more mistakes.
 
-**Priming**. It's also possible to prime the model with some starting text using `-primetext`. This starts out the RNN with some hardcoded characters to *warm* it up with some context before it starts generating text. E.g. a fun primetext might be `-primetext "the meaning of life is "`. 
+**Priming**. It's also possible to prime the model with some starting text using `-primetext`. This starts out the RNN with some hardcoded characters to *warm* it up with some context before it starts generating text. E.g. a fun primetext might be `-primetext "the meaning of life is "`.
 
 **Training with GPU but sampling on CPU**. Right now the solution is to use the `convert_gpu_cpu_checkpoint.lua` script to convert your GPU checkpoint to a CPU checkpoint. In near future you will not have to do this explicitly. E.g.:
 
