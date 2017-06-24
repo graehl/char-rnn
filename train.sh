@@ -40,6 +40,9 @@ mkdir -p cv/"$prefix"_"$model"_"$rnn"hidden_"$layer"layer
 rm -f $cv_dir/*
 
 echo $model $size
+if [[ $debug ]] ; then
+    export CUDA_LAUNCH_BLOCKING=1
+fi
 export LUA_PATH="$d/?.lua;$LUA_PATH"
 time th $d/train.lua \
 -data_dir $data \

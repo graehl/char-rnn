@@ -1,14 +1,14 @@
 --[[
 
-This file samples characters from a trained model
+    This file samples characters from a trained model
 
-Code is based on implementation in
-https://github.com/oxford-cs-ml-2015/practical6
+    Code is based on implementation in
+    https://github.com/oxford-cs-ml-2015/practical6
 
-Changes (raymondhs):
+    Changes (raymondhs):
 
-Beam search are parallelized on GPU
-UTF8 character handling
+    Beam search are parallelized on GPU
+    UTF8 character handling
 
 ]]--
 
@@ -48,73 +48,93 @@ cmd:text()
 -- parse input params
 opt = cmd:parse(arg)
 
-function splitstring(str, pattern)
-  local t = {}
-  for i in string.gfind(str, "([%z\1-\127\194-\244][\128-\191]*)") do
-    t[#t + 1] = i
-  end
-  return t
+local UNK='<unk>'
+
+function utf8chars(str)
+    local t = {}
+    for i in string.gfind(str, "([%z\1-\127\194-\244][\128-\191]*)") do
+        table.insert(t, i)
+    end
+    return t
 end
 
 -- gated print: simple utility function wrapping a print
+function vprint(v, str)
+    if opt.verbose >= v then
+        str = str:gsub('\n', '<n>')
+        io.stderr:write(str .. '\n')
+        io:flush()
+    end
+end
+
 function gprint(str)
-  str = str:gsub('\n', '<n>')
-  if opt.verbose == 1 then io.stderr:write(str .. '\n') end
-  io:flush()
+    vprint(1, str)
+end
+
+function vprint2(v, ...)
+    if opt.verbose >= v then
+        vprint(v, table.concat({...}, ''))
+    end
+end
+
+function fatal(str)
+    opt.verbose = 1
+    require 'pl.pretty'.dump(str)
+    assert(not "FATAL ERROR: " .. str)
 end
 
 function clone_state(cc)
-  new_state = {}
-  if cc ~= nil then
-    for L = 1,table.getn(cc) do
-      -- c and h for all layers
-      table.insert(new_state, cc[L]:clone())
+    new_state = {}
+    if cc ~= nil then
+        for L = 1,table.getn(cc) do
+            -- c and h for all layers
+            table.insert(new_state, cc[L]:clone())
+        end
+    else
+        new_state = nil
     end
-  else
-    new_state = nil
-  end
-  return new_state
+    return new_state
 end
 
 -- check that cunn/cutorch are installed if user wants to use the GPU
 if opt.gpuid >= 0 and opt.opencl == 0 then
-  local ok, cunn = pcall(require, 'cunn')
-  local ok2, cutorch = pcall(require, 'cutorch')
-  if not ok then gprint('package cunn not found!') end
-  if not ok2 then gprint('package cutorch not found!') end
-  if ok and ok2 then
-    gprint('using CUDA on GPU ' .. opt.gpuid .. '...')
-    gprint('Make sure that your saved checkpoint was also trained with GPU. If it was trained with CPU use -gpuid -1 for sampling as well')
-    cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
-    cutorch.manualSeed(opt.seed)
-  else
-    gprint('Falling back on CPU mode')
-    opt.gpuid = -1 -- overwrite user setting
-  end
+    local ok, cunn = pcall(require, 'cunn')
+    local ok2, cutorch = pcall(require, 'cutorch')
+    if not ok then gprint('package cunn not found!') end
+    if not ok2 then gprint('package cutorch not found!') end
+    if ok and ok2 then
+        gprint('using CUDA on GPU ' .. opt.gpuid .. '...')
+        gprint('Make sure that your saved checkpoint was also trained with GPU. If it was trained with CPU use -gpuid -1 for sampling as well')
+        cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
+        cutorch.manualSeed(opt.seed)
+    else
+        gprint('Falling back on CPU mode')
+        opt.gpuid = -1 -- overwrite user setting
+    end
 end
 
 -- check that clnn/cltorch are installed if user wants to use OpenCL
 if opt.gpuid >= 0 and opt.opencl == 1 then
-  local ok, cunn = pcall(require, 'clnn')
-  local ok2, cutorch = pcall(require, 'cltorch')
-  if not ok then print('package clnn not found!') end
-  if not ok2 then print('package cltorch not found!') end
-  if ok and ok2 then
-    gprint('using OpenCL on GPU ' .. opt.gpuid .. '...')
-    gprint('Make sure that your saved checkpoint was also trained with GPU. If it was trained with CPU use -gpuid -1 for sampling as well')
-    cltorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
-    torch.manualSeed(opt.seed)
-  else
-    gprint('Falling back on CPU mode')
-    opt.gpuid = -1 -- overwrite user setting
-  end
+    local ok, cunn = pcall(require, 'clnn')
+    local ok2, cutorch = pcall(require, 'cltorch')
+    if not ok then print('package clnn not found!') end
+    if not ok2 then print('package cltorch not found!') end
+    if ok and ok2 then
+        gprint('using OpenCL on GPU ' .. opt.gpuid .. '...')
+        gprint('Make sure that your saved checkpoint was also trained with GPU. If it was trained with CPU use -gpuid -1 for sampling as well')
+        cltorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
+        torch.manualSeed(opt.seed)
+    else
+        gprint('Falling back on CPU mode')
+        opt.gpuid = -1 -- overwrite user setting
+    end
 end
 
 torch.manualSeed(opt.seed)
 
 -- load the model checkpoint
 if not lfs.attributes(opt.model, 'mode') then
-  gprint('Error: File ' .. opt.model .. ' does not exist. Are you sure you didn\'t forget to prepend cv/ ?')
+    gprint('Error: File ' .. opt.model .. ' does not exist. Are you sure you didn\'t forget to prepend cv/ ?')
 end
 checkpoint = torch.load(opt.model)
 protos = checkpoint.protos
@@ -123,10 +143,16 @@ protos.rnn:evaluate() -- put in eval mode so that dropout works properly
 -- initialize the vocabulary (and its inverted version)
 local vocab = checkpoint.vocab
 local ivocab = {}
-for c,i in pairs(vocab) do ivocab[i] = c end
-
+local nvocab = 0
 for c,i in pairs(vocab) do
-  gprint(c .. ' ' .. i)
+    ivocab[i] = c
+    nvocab = nvocab + 1
+    vprint(2, c .. ' ' .. i)
+end
+local VUNK = vocab[UNK]
+gprint("vocab has " .. nvocab .. " items including unk/newline")
+if VUNK == nil then
+    fatal("ERROR: '" .. UNK .. "' not in vocab")
 end
 
 -- initialize the rnn state to all zeros
@@ -134,14 +160,14 @@ gprint('creating an ' .. checkpoint.opt.model .. '...')
 local current_state
 current_state = {}
 for L = 1,checkpoint.opt.num_layers do
-  -- c and h for all layers
-  local h_init = torch.zeros(1, checkpoint.opt.rnn_size):double()
-  if opt.gpuid >= 0 and opt.opencl == 0 then h_init = h_init:cuda() end
-  if opt.gpuid >= 0 and opt.opencl == 1 then h_init = h_init:cl() end
-  table.insert(current_state, h_init:clone())
-  if checkpoint.opt.model == 'lstm' then
+    -- c and h for all layers
+    local h_init = torch.zeros(1, checkpoint.opt.rnn_size):double()
+    if opt.gpuid >= 0 and opt.opencl == 0 then h_init = h_init:cuda() end
+    if opt.gpuid >= 0 and opt.opencl == 1 then h_init = h_init:cl() end
     table.insert(current_state, h_init:clone())
-  end
+    if checkpoint.opt.model == 'lstm' then
+        table.insert(current_state, h_init:clone())
+    end
 end
 
 state_size = #current_state
@@ -154,16 +180,16 @@ local seed_text = opt.primetext
 
 local seed_text = opt.primetext
 if opt.stdin then
-   seed_text = ''
-   local stexts = {}
-   while true do
-      local line = io.read()
-      if line == nil then break end
-      seed_text = seed_text .. '\n' .. line
-   end
+    seed_text = ''
+    local stexts = {}
+    while true do
+        local line = io.read()
+        if line == nil then break end
+        seed_text = seed_text .. '\n' .. line
+    end
 elseif not seed_text then
-   gprint('missing seed text, using uniform probability over first character')
-   gprint('--------------------------')
+    gprint('missing seed text, using uniform probability over first character')
+    gprint('--------------------------')
 end
 
 prediction = torch.Tensor(1, #ivocab):fill(1)/(#ivocab)
@@ -171,194 +197,195 @@ if opt.gpuid >= 0 and opt.opencl == 0 then prediction = prediction:cuda() end
 if opt.gpuid >= 0 and opt.opencl == 1 then prediction = prediction:cl() end
 
 if opt.stdin then
--- start sampling/argmaxing
-while (seed_text ~= '') do
-  stext = seed_text
-  seed_text = ''
+    gprint("-stdin 1 => recasing stdin")
+    -- start sampling/argmaxing
+    while (seed_text ~= '') do
+        stext = seed_text
+        seed_text = ''
 
-  gprint('processing ' .. stext .. '...')
-  chars = splitstring(stext, '.')
+        vprint2(3, 'processing ', stext)
+        chars = utf8chars(stext, '.')
 
-  beamsize = opt.beamsize
-  beamState = {}
-  beamScore = {}
+        beamsize = opt.beamsize
+        beamState = {}
+        beamScore = {}
 
-  beamString = {} -- index to string
-  beamLastChar = {}
-  beamState[1] = clone_state(current_state)
-  beamScore[1] = 0
-  beamString[1] = ''
+        beamString = {} -- index to string
+        beamLastChar = {}
+        beamState[1] = clone_state(current_state)
+        beamScore[1] = 0
+        beamString[1] = ''
 
-  ii = 1
-  prev_char = nil
-  while ii <= #chars do
-
-    newBeamState = {}
-    newBeamScore = {}
-    newBeamString = {}
-    newBeamLastChar = {}
-    scores = {}
-    beam_index = 1
-
-    beamSize = 0
-    for _, _ in pairs(beamState) do beamSize = beamSize+1 end
-    prev_chars = torch.CudaTensor(beamSize)
-    current_states = {}
-    for i=1,state_size do
-        table.insert(current_states, torch.CudaTensor(beamSize, checkpoint.opt.rnn_size))
-    end
-
-    cnt=1
-
-    for cc, vv in pairs(beamState) do
-      current_str = beamString[cc]
-      current_state = vv
-      current_score = beamScore[cc]
-
-      strlen = utf8.len(current_str)
-      if strlen > 0 then
-        bb = beamLastChar[cc]
-        if vocab[ bb ] == nil then
-            prev_char = torch.Tensor{vocab[UNK]}
-            prev_chars[cnt] = vocab[UNK]
-        else
-            prev_char = torch.Tensor{ vocab[ bb ] }
-            prev_chars[cnt] = vocab[bb]
-        end
-      else
+        ii = 1
         prev_char = nil
-      end
-      for i=1,state_size do
-        current_states[i][cnt]:copy(current_state[i])
-      end
+        while ii <= #chars do
 
-      cnt = cnt+1
-    end
+            newBeamState = {}
+            newBeamScore = {}
+            newBeamString = {}
+            newBeamLastChar = {}
+            scores = {}
+            beam_index = 1
 
-    cnt = 1
+            beamSize = 0
+            for _, _ in pairs(beamState) do beamSize = beamSize+1 end
+            prev_chars = torch.CudaTensor(beamSize)
+            current_states = {}
+            for i=1,state_size do
+                table.insert(current_states, torch.CudaTensor(beamSize, checkpoint.opt.rnn_size))
+            end
 
-    new_states = {}
-    predictions = nil
-    if prev_char ~= nil then
-      local lst = protos.rnn:forward{prev_chars, unpack(current_states)}
-      for i=1,state_size do table.insert(new_states, lst[i]) end
-      predictions = lst[#lst] -- last element holds the log probabilities
-      predictions:div(opt.temperature) -- scale by temperature
-    end
+            cnt=1
 
-    for cc, vv in pairs(beamState) do
-      current_str = beamString[cc]
-      current_state = vv
-      current_score = beamScore[cc]
-      local ci = chars[ii]
-      candidates = {ci}
-      gprint('char(' .. ci .. ')')
-      gprint('sco=' .. current_score .. ')')
-      local ucia = utf8.upper(ci)
-      if uci ~= ci and vocab[ci] ~= nil then
-        table.insert(candidates, uci)
-      end
-      for jj = 1,#candidates do
-        c = candidates[jj]
-        this_char = torch.Tensor{vocab[c]}
-        if vocab[c] == nil then this_char = torch.Tensor{vocab[UNK]} end
+            for cc, vv in pairs(beamState) do
+                current_str = beamString[cc]
+                current_state = vv
+                current_score = beamScore[cc]
 
-        if prev_char ~= nil then
-          if this_char ~= nil then
-            newstr = current_str .. c
-            newsco = current_score + predictions[cnt][this_char[1]]
-          end
-          new_state = {}
-          local state = torch.zeros(1, checkpoint.opt.rnn_size)
-          for i=1,state_size do
-            table.insert(new_state, state:clone():copy(new_states[i][cnt]))
-          end
+                strlen = utf8.len(current_str)
+                if strlen > 0 then
+                    bb = beamLastChar[cc]
+                    if vocab[ bb ] == nil then
+                        prev_char = torch.Tensor{vocab[UNK]}
+                        prev_chars[cnt] = vocab[UNK]
+                    else
+                        prev_char = torch.Tensor{ vocab[ bb ] }
+                        prev_chars[cnt] = vocab[bb]
+                    end
+                else
+                    prev_char = nil
+                end
+                for i=1,state_size do
+                    current_states[i][cnt]:copy(current_state[i])
+                end
 
-          gprint('\ttesting ' .. c .. ' score = ' .. predictions[cnt][this_char[1]] )
-        else
-          gprint('\ttesting ' .. c)
-          new_state = default_state
-          newstr = current_str .. c
-          newsco = current_score
+                cnt = cnt+1
+            end
+
+            cnt = 1
+
+            new_states = {}
+            predictions = nil
+            if prev_char ~= nil then
+                local lst = protos.rnn:forward{prev_chars, unpack(current_states)}
+                for i=1,state_size do table.insert(new_states, lst[i]) end
+                predictions = lst[#lst] -- last element holds the log probabilities
+                predictions:div(opt.temperature) -- scale by temperature
+            end
+
+            for cc, vv in pairs(beamState) do
+                current_str = beamString[cc]
+                current_state = vv
+                current_score = beamScore[cc]
+                local ci = chars[ii]
+                local vci = vocab[ci] or VUNK
+                candidates = {vci}
+                if vci ~= VUNK then
+                    local uci = utf8.upper(ci)
+                    if uci ~= ci then
+                        local vuci = vocab[uci]
+                        vprint2(2, 'char(', ci, ')=>', vci, ' uchar(', uci, ')=>', vuci, ' currentsco= ', current_score, ')')
+                        table.insert(candidates, vuci)
+                    end
+                end
+                for jj = 1,#candidates do
+                    vc = candidates[jj]
+                    c = assert(ivocab[vc])
+                    this_char = torch.Tensor{vc}
+                    if prev_char ~= nil then
+                        if this_char ~= nil then
+                            newstr = current_str .. c
+                            newsco = current_score + predictions[cnt][this_char[1]]
+                        end
+                        new_state = {}
+                        local state = torch.zeros(1, checkpoint.opt.rnn_size)
+                        for i=1,state_size do
+                            table.insert(new_state, state:clone():copy(new_states[i][cnt]))
+                        end
+                        vprint2(2, '\ttesting \'', c, '\' score = ', predictions[cnt][this_char[1]] )
+                    else
+                        vprint2(2, '\ttesting \'', c, '\'')
+                        new_state = default_state
+                        newstr = current_str .. c
+                        newsco = current_score
+                    end
+                    newBeamState[beam_index] = clone_state(new_state)
+                    newBeamScore[beam_index] = newsco
+                    newBeamString[beam_index] = newstr
+                    newBeamLastChar[beam_index] = c
+                    beam_index = beam_index + 1
+                    table.insert(scores, newsco)
+                end
+                cnt = cnt + 1
+            end
+
+            table.sort(scores)
+            beamState = {}
+            beamScore = {}
+            beamString = {}
+            beamLastChar = {}
+
+            cnt = 0
+            tid = #scores - beamsize + 1
+            if tid<1 then tid = 1 end
+            threshold = scores[tid]
+            for cc,vv in pairs(newBeamScore) do
+                vprint2(2, 'Beam State:(', cc, ',', vv, ') threshold=', threshold, ')')
+                if vv >= threshold then
+                    beamState[cc] = newBeamState[cc]
+                    beamScore[cc] = newBeamScore[cc]
+                    beamString[cc] = newBeamString[cc]
+                    beamLastChar[cc] = newBeamLastChar[cc]
+                    cnt = cnt + 1
+                end
+            end
+            ii = ii + 1
         end
-        newBeamState[beam_index] = clone_state(new_state)
-        newBeamScore[beam_index] = newsco
-        newBeamString[beam_index] = newstr
-        newBeamLastChar[beam_index] = c
-        beam_index = beam_index + 1
-        table.insert(scores, newsco)
-      end
-      cnt = cnt + 1
+        threshold = scores[#scores]
+        beststr = nil
+        for cc,vv in pairs(newBeamScore) do
+            if vv == threshold then
+                beststr = newBeamString[cc]
+                current_state = newBeamState[cc]
+            end
+        end
+        beststr = beststr:gsub("^%s+", ""):gsub("%s+$", "")
+        io.write(beststr .. '\n') io.flush()
     end
-
-    table.sort(scores)
-    beamState = {}
-    beamScore = {}
-    beamString = {}
-    beamLastChar = {}
-
-    cnt = 0
-    tid = #scores - beamsize + 1
-    if tid<1 then tid = 1 end
-    threshold = scores[tid]
-    for cc,vv in pairs(newBeamScore) do
-      gprint('\nBeam State:(' .. cc .. ',' .. vv .. ') threshold=' .. threshold .. ')')
-      if vv >= threshold then
-        beamState[cc] = newBeamState[cc]
-        beamScore[cc] = newBeamScore[cc]
-        beamString[cc] = newBeamString[cc]
-        beamLastChar[cc] = newBeamLastChar[cc]
-        cnt = cnt + 1
-      end
-    end
-    ii = ii + 1
-  end
-  threshold = scores[#scores]
-  beststr = nil
-  for cc,vv in pairs(newBeamScore) do
-    if vv == threshold then
-      beststr = newBeamString[cc]
-      current_state = newBeamState[cc]
-    end
-  end
-  beststr = beststr:gsub("^%s+", ""):gsub("%s+$", "")
-  io.write(beststr .. '\n') io.flush()
-end
 else
-   -- start sampling/argmaxing
-   result = ''
-   UNK='<unk>'
-   for i=1, opt.length do
+    -- start sampling/argmaxing
+    result = ''
+    for i=1, opt.length do
 
-      -- log probabilities from the previous timestep
-      -- make sure the output char is not UNKNOW
-      if opt.sample == 0 then
-         -- use argmax
-         local _, prev_char_ = prediction:max(2)
-         prev_char = prev_char_:resize(1)
-      else
-         -- use sampling
-         real_char = UNK
-         while(real_char == UNK) do
-			prediction:div(opt.temperature) -- scale by temperature
-			local probs = torch.exp(prediction):squeeze()
-			probs:div(torch.sum(probs)) -- renormalize so probs sum to one
-			prev_char = torch.multinomial(probs:float(), 1):resize(1):float()
-			real_char = ivocab[prev_char[1]]
-         end
-      end
+        -- log probabilities from the previous timestep
+        -- make sure the output char is not UNKNOW
+        if opt.sample == 0 then
+            -- use argmax
+            local _, prev_char_ = prediction:max(2)
+            prev_char = prev_char_:resize(1)
+        else
+            -- use sampling
+            real_char = UNK
+            while(real_char == UNK) do
+                prediction:div(opt.temperature) -- scale by temperature
+                local probs = torch.exp(prediction):squeeze()
+                probs:div(torch.sum(probs)) -- renormalize so probs sum to one
+                prev_char = torch.multinomial(probs:float(), 1):resize(1):float()
+                real_char = ivocab[prev_char[1]]
+            end
+        end
 
-      -- forward the rnn for next character
-      local lst = protos.rnn:forward{prev_char, unpack(current_state)}
-      current_state = {}
-      for i=1,state_size do table.insert(current_state, lst[i]) end
-      prediction = lst[#lst] -- last element holds the log probabilities
+        -- forward the rnn for next character
+        local lst = protos.rnn:forward{prev_char, unpack(current_state)}
+        current_state = {}
+        for i=1,state_size do table.insert(current_state, lst[i]) end
+        prediction = lst[#lst] -- last element holds the log probabilities
 
-      -- io.write(ivocab[prev_char[1]])
-      result = result .. ivocab[prev_char[1]]
+        -- io.write(ivocab[prev_char[1]])
+        result = result .. ivocab[prev_char[1]]
 
-      -- in my data, five \n represent the end of each document
-      -- so count \n to stop sampling
-      if string.find(result, opt.stop) then break end
-   end
+        -- in my data, five \n represent the end of each document
+        -- so count \n to stop sampling
+        if string.find(result, opt.stop) then break end
+    end
 end

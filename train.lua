@@ -1,14 +1,14 @@
 --[[
 
-This file trains a character-level multi-layer RNN on text data
+    This file trains a character-level multi-layer RNN on text data
 
-Code is based on implementation in
-https://github.com/oxford-cs-ml-2015/practical6
-but modified to have multi-layer support, GPU support, as well as
-many other common model/optimization bells and whistles.
-The practical6 code is in turn based on
-https://github.com/wojciechz/learning_to_execute
-which is turn based on other stuff in Torch, etc... (long lineage)
+    Code is based on implementation in
+    https://github.com/oxford-cs-ml-2015/practical6
+    but modified to have multi-layer support, GPU support, as well as
+    many other common model/optimization bells and whistles.
+    The practical6 code is in turn based on
+    https://github.com/wojciechz/learning_to_execute
+    which is turn based on other stuff in Torch, etc... (long lineage)
 
 ]]--
 
@@ -50,12 +50,12 @@ cmd:option('-max_epochs',50,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-train_frac',0.95,'fraction of data that goes into train set')
 cmd:option('-val_frac',0.05,'fraction of data that goes into validation set')
-            -- test_frac will be computed as (1 - train_frac - val_frac)
+-- test_frac will be computed as (1 - train_frac - val_frac)
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
 -- bookkeeping
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-print_every',1,'how many steps/minibatches between printing out the loss')
-cmd:option('-eval_val_every',2000,'every how many iterations should we evaluate on validation data?')
+cmd:option('-eval_val_every',4000,'every how many iterations should we evaluate on validation data?')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-accurate_gpu_timing',0,'set this flag to 1 to get precise timings when using GPU. Might make code bit slower but reports accurate timings.')
@@ -115,7 +115,7 @@ end
 
 -- create the data loader class
 local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes, opt.min_freq)
-local vocab_size = loader.vocab_size  -- the number of distinct characters
+local vocab_size = loader.vocab_size -- the number of distinct characters
 local vocab = loader.vocab_mapping
 print('vocab size: ' .. vocab_size)
 -- make sure output directory exists
@@ -329,9 +329,9 @@ for i = 1, iterations do
     local _, loss = optim.rmsprop(feval, params, optim_state)
     if opt.accurate_gpu_timing == 1 and opt.gpuid >= 0 then
         --[[
-        Note on timing: The reported time can be off because the GPU is invoked async. If one
-        wants to have exactly accurate timings one must call cutorch.synchronize() right here.
-        I will avoid doing so by default because this can incur computational overhead.
+            Note on timing: The reported time can be off because the GPU is invoked async. If one
+            wants to have exactly accurate timings one must call cutorch.synchronize() right here.
+            I will avoid doing so by default because this can incur computational overhead.
         --]]
         cutorch.synchronize()
     end

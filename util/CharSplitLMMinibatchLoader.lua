@@ -73,15 +73,18 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
         if len % (batch_size * seq_length) ~= 0 then
             print('cutting off end of data so that the batches/sequences divide evenly')
             val_data = val_data:sub(1, batch_size * seq_length
-                        * math.floor(len / (batch_size * seq_length)))
+                                        * math.floor(len / (batch_size * seq_length)))
         end
     end
 
     -- count vocab
-    self.vocab_size = 0
+    nv = 0
     for _ in pairs(self.vocab_mapping) do
-        self.vocab_size = self.vocab_size + 1
+        nv = nv + 1
     end
+
+    assert(nv >= 2)
+    self.vocab_size = nv
 
     -- self.batches is a table of tensors
     print('reshaping tensor...')
@@ -179,32 +182,32 @@ end
 local UNK = "<unk>"
 -- *** STATIC method ***
 function VisitUtf8Chars(f, unordered)
-   local len = 0
-   local line
-   local nlines = 0
-   while true do
-     line = f:read()
-     if line == nil then break end -- no more lines to read
-     for char_code, char in pairs(UTF8ToCharArray(line)) do
-         if unordered then unordered[char] = (unordered[char] or 0) + 1 end
-         len = len + 1
-     end
-     nlines = nlines + 1
-     len = len + 1
-   end
-   if unordered then
-      unordered[UNK] = 99999
-      unordered['\n'] = nlines
-   end
-   return len
+    local len = 0
+    local line
+    local nlines = 0
+    while true do
+        line = f:read()
+        if line == nil then break end -- no more lines to read
+        for char_code, char in pairs(UTF8ToCharArray(line)) do
+            if unordered then unordered[char] = (unordered[char] or 0) + 1 end
+            len = len + 1
+        end
+        nlines = nlines + 1
+        len = len + 1
+    end
+    if unordered then
+        unordered[UNK] = 99999
+        unordered['\n'] = nlines
+    end
+    return len
 end
 
 function VisitUtf8CharsOpen(filename, unordered)
-   f = assert(io.open(filename, "r"))
-   local n = VisitUtf8Chars(f, unordered)
-   print('text ' .. filename .. ' had ' .. n .. ' chars including [newline]')
-   f:close()
-   return n
+    f = assert(io.open(filename, "r"))
+    local n = VisitUtf8Chars(f, unordered)
+    print('text ' .. filename .. ' had ' .. n .. ' chars including [newline]')
+    f:close()
+    return n
 end
 
 
@@ -233,19 +236,21 @@ function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, o
         -- sort into a table (i.e. keys become 1..N)
         local allfreq = 0
         for char, c in pairs(unordered) do
-           if c >= min_freq then
-              ordered[#ordered + 1] = char
-           end
-           allfreq = allfreq + 1
+            if c >= min_freq then
+                table.insert(ordered, char)
+            end
+            allfreq = allfreq + 1
         end
         table.sort(ordered)
         -- invert `ordered` to create the char->int mapping
         for i, char in ipairs(ordered) do
             vocab_mapping[char] = i
         end
-        print(allfreq .. ' char types observed; ' .. #ordered .. ' with count >= ' .. min_freq)
-        print((allfreq - #ordered) .. ' char types with count < ' .. min_freq)
+        local nkept = #ordered
+        print(allfreq .. ' char types observed; ' .. nkept .. ' with count >= ' .. min_freq)
+        print((allfreq - nkept) .. ' char types with count < ' .. min_freq)
         print('saving ' .. out_vocabfile)
+        assert(nkept > 2)
         torch.save(out_vocabfile, vocab_mapping)
     end
     vocab_size = 0
@@ -261,18 +266,18 @@ function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, o
     local f = assert(io.open(in_textfile, "r"))
     local line
     while true do
-      line = f:read()
-      if line == nil then break end -- no more lines to read
-      for char_code, char in pairs(UTF8ToCharArray(line)) do
-         data[currlen] = vocab_mapping[char] or vocab_mapping[UNK]
-         currlen = currlen + 1
-      end
-      -- don't forget end of line character it is excluded by f:read()
-      data[currlen] = vocab_mapping['\n']
-      currlen = currlen + 1
-      if math.fmod(currlen, 10000) == 0 then
-        print('read ' .. currlen .. ' / ' .. len)
-      end
+        line = f:read()
+        if line == nil then break end -- no more lines to read
+        for char_code, char in pairs(UTF8ToCharArray(line)) do
+            data[currlen] = vocab_mapping[char] or vocab_mapping[UNK]
+            currlen = currlen + 1
+        end
+        -- don't forget end of line character it is excluded by f:read()
+        data[currlen] = vocab_mapping['\n']
+        currlen = currlen + 1
+        if math.fmod(currlen, 10000) == 0 then
+            print('read ' .. currlen .. ' / ' .. len)
+        end
     end
     f:close()
 
