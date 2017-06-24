@@ -1,4 +1,3 @@
-
 -- misc utilities
 
 function clone_list(tensor_list, zero_too)

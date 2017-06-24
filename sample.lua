@@ -35,12 +35,14 @@ cmd:argument('-model','model checkpoint to use for sampling')
 cmd:option('-seed',123,'random number generator\'s seed')
 cmd:option('-sample',1,' 0 to use max at each timestep, 1 to sample at each timestep')
 cmd:option('-primetext',"",'used as a prompt to "seed" the state of the LSTM using a given sequence, before we sample.')
-cmd:option('-length',2000,'number of characters to sample')
+cmd:option('-length',3000,'max number of characters to sample (input/primetext must be shorter)')
 cmd:option('-temperature',1,'temperature of sampling')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-opencl',0,'use OpenCL (instead of CUDA)')
 cmd:option('-verbose',1,'set to 0 to ONLY print the sampled text, no diagnostics')
 cmd:option('-beamsize',1,'defaults to 1')
+cmd:option('-stop','\n\n\n\n\n','stop sampling when this string (5 newlines by default) is detected')
+cmd:option('-stdin',1,"if true, ignore primetext and take stdin and generate (beam search) alternative capitalizations")
 cmd:text()
 
 -- parse input params
@@ -49,7 +51,6 @@ opt = cmd:parse(arg)
 function splitstring(str, pattern)
   local t = {}
   for i in string.gfind(str, "([%z\1-\127\194-\244][\128-\191]*)") do
-  --for i in str:gmatch(pattern) do
     t[#t + 1] = i
   end
   return t
@@ -149,24 +150,27 @@ default_state = clone_state(current_state)
 -- Initialization
 --[[
 local seed_text = opt.primetext
-gprint('missing seed text, using uniform probability over first character')
-gprint('--------------------------')
-prediction = torch.Tensor(1, #ivocab):fill(1)/(#ivocab)
-if opt.gpuid >= 0 and opt.opencl == 0 then prediction = prediction:cuda() end
-if opt.gpuid >= 0 and opt.opencl == 1 then prediction = prediction:cl() end
 ]]--
 
-local seed_text = ''
-local stexts = {}
-while true do
-  local line = io.read()
-  if line == nil then break end
-  seed_text = seed_text .. '\n' .. line
+local seed_text = opt.primetext
+if opt.stdin then
+   seed_text = ''
+   local stexts = {}
+   while true do
+      local line = io.read()
+      if line == nil then break end
+      seed_text = seed_text .. '\n' .. line
+   end
+elseif not seed_text then
+   gprint('missing seed text, using uniform probability over first character')
+   gprint('--------------------------')
 end
+
 prediction = torch.Tensor(1, #ivocab):fill(1)/(#ivocab)
 if opt.gpuid >= 0 and opt.opencl == 0 then prediction = prediction:cuda() end
 if opt.gpuid >= 0 and opt.opencl == 1 then prediction = prediction:cl() end
 
+if opt.stdin then
 -- start sampling/argmaxing
 while (seed_text ~= '') do
   stext = seed_text
@@ -319,4 +323,42 @@ while (seed_text ~= '') do
   end
   beststr = beststr:gsub("^%s+", ""):gsub("%s+$", "")
   io.write(beststr .. '\n') io.flush()
+end
+else
+   -- start sampling/argmaxing
+   result = ''
+   UNK='<unk>'
+   for i=1, opt.length do
+
+      -- log probabilities from the previous timestep
+      -- make sure the output char is not UNKNOW
+      if opt.sample == 0 then
+         -- use argmax
+         local _, prev_char_ = prediction:max(2)
+         prev_char = prev_char_:resize(1)
+      else
+         -- use sampling
+         real_char = UNK
+         while(real_char == UNK) do
+			prediction:div(opt.temperature) -- scale by temperature
+			local probs = torch.exp(prediction):squeeze()
+			probs:div(torch.sum(probs)) -- renormalize so probs sum to one
+			prev_char = torch.multinomial(probs:float(), 1):resize(1):float()
+			real_char = ivocab[prev_char[1]]
+         end
+      end
+
+      -- forward the rnn for next character
+      local lst = protos.rnn:forward{prev_char, unpack(current_state)}
+      current_state = {}
+      for i=1,state_size do table.insert(current_state, lst[i]) end
+      prediction = lst[#lst] -- last element holds the log probabilities
+
+      -- io.write(ivocab[prev_char[1]])
+      result = result .. ivocab[prev_char[1]]
+
+      -- in my data, five \n represent the end of each document
+      -- so count \n to stop sampling
+      if string.find(result, opt.stop) then break end
+   end
 end

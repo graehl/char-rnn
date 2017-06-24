@@ -1,4 +1,3 @@
-
 --[[
 
 This file trains a character-level multi-layer RNN on text data
@@ -34,10 +33,11 @@ cmd:text()
 cmd:text('Options')
 -- data
 cmd:option('-data_dir','data/tinyshakespeare','data directory. Should contain the file input.txt with input data')
+cmd:option('-min_freq',10,'treat as unk any chars w/ count below this')
 -- model params
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
-cmd:option('-model', 'lstm', 'lstm,gru or rnn')
+cmd:option('-model', 'lstm', 'lstm,gru or rnn (recommend lstm)')
 -- optimization
 cmd:option('-learning_rate',2e-3,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
@@ -55,19 +55,24 @@ cmd:option('-init_from', '', 'initialize network parameters from checkpoint at t
 -- bookkeeping
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-print_every',1,'how many steps/minibatches between printing out the loss')
-cmd:option('-eval_val_every',1000,'every how many iterations should we evaluate on validation data?')
+cmd:option('-eval_val_every',2000,'every how many iterations should we evaluate on validation data?')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-accurate_gpu_timing',0,'set this flag to 1 to get precise timings when using GPU. Might make code bit slower but reports accurate timings.')
 -- GPU/CPU
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-opencl',0,'use OpenCL (instead of CUDA)')
-cmd:option('-min_freq',10,'treat as unk any chars w/ count below this')
+-- Scheduled Sampling
+cmd:option('-use_ss', 1, 'whether use scheduled sampling during training')
+cmd:option('-start_ss', 1, 'start amount of truth data to be given to the model when using ss')
+cmd:option('-decay_ss', 0.005, 'ss amount decay rate of each epoch')
+cmd:option('-min_ss', 0.9, 'minimum amount of truth data to be given to the model when using ss')
 cmd:text()
 
 -- parse input params
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
+math.randomseed(opt.seed)
 -- train / val / test split for data, in fractions
 local test_frac = math.max(0, 1 - (opt.train_frac + opt.val_frac))
 local split_sizes = {opt.train_frac, opt.val_frac, test_frac}
@@ -244,7 +249,7 @@ function eval_split(split_index, max_batches)
         end
         -- carry over lstm state
         rnn_state[0] = rnn_state[#rnn_state]
-        print(i .. '/' .. n .. '...')
+        -- print(i .. '/' .. n .. '...')
     end
 
     loss = loss / opt.seq_length / n
@@ -268,7 +273,15 @@ function feval(x)
     local loss = 0
     for t=1,opt.seq_length do
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)
-        local lst = clones.rnn[t]:forward{x[t], unpack(rnn_state[t-1])}
+        if opt.use_ss == 1 and t > 1 and math.random() > ss_current then
+            local probs = torch.exp(predictions[t-1]):squeeze()
+            _,samples = torch.max(probs,2)
+            xx = samples:view(samples:nElement())
+        else
+            xx = x[t]
+        end
+        -- print(x[{{},t}])
+        local lst = clones.rnn[t]:forward{xx, unpack(rnn_state[t-1])}
         rnn_state[t] = {}
         for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end -- extract the state, without output
         predictions[t] = lst[#lst] -- last element is the prediction
@@ -308,6 +321,7 @@ local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
 local iterations = opt.max_epochs * loader.ntrain
 local iterations_per_epoch = loader.ntrain
 local loss0 = nil
+ss_current = opt.start_ss
 for i = 1, iterations do
     local epoch = i / loader.ntrain
 
@@ -333,6 +347,12 @@ for i = 1, iterations do
             optim_state.learningRate = optim_state.learningRate * decay_factor -- decay it
             print('decayed learning rate by a factor ' .. decay_factor .. ' to ' .. optim_state.learningRate)
         end
+    end
+
+    -- decay schedule sampling amount
+    if opt.use_ss == 1 and i % loader.ntrain == 0 and ss_current > opt.min_ss then
+        ss_current = opt.start_ss - opt.decay_ss * epoch
+        print('decay schedule sampling amount to ' .. ss_current)
     end
 
     -- every now and then or on last iteration

@@ -171,3 +171,47 @@ To learn more about RNN language models I recommend looking at:
 ## License
 
 MIT
+
+## opt.min_freq
+I [zhangzbin] also add an option called 'min_freq' because the vocab size in Chinese is very big, which makes the parameter num increase a lot.
+So delete some rare character may help.
+
+## Scheduled Sampling
+Samy Bengio's paper [Scheduled Sampling for Sequence Prediction with Recurrent Neural Networks](http://arxiv.org/abs/1506.03099) in NIPS15 propose a simple but power method to implove RNN.
+
+In my experiment, I find it helps a lot to avoid overfitting and make the test loss go deeper. I only use linear decay.
+
+Use `-use_ss` to turn on or turn off scheduled sampling, default is on. `-start_ss` is the start aomunt of real data, I suggest to use 1 because our model should learn data without noise at the very beginning. `-min_ss` is also very important as too much noise will hurt performance. Finally, `-decay_ss` is the linear decay rate.
+
+
+## Model conversion between cpu and gpu
+I add a script to convert a model file trained by gpu to cpu model.
+You can try it as follow:
+```bash
+$ th convert.lua gpu_model cpu_model
+```
+
+## web interface
+A web demo is added for others to test model easily, based on sub/pub of redis.
+I use redis because i can't found some good RPC or WebServer work well integrated with Torch.
+You should notice that the demo is async by ajax. To setup the demo on ubuntu:
+Install redis and start it
+```bash
+$ wget http://download.redis.io/releases/redis-3.0.3.tar.gz
+$ tar xzf redis-3.0.3.tar.gz
+$ cd redis-3.0.3
+$ make
+$ sudo make install
+$ redis-server &
+```
+Then install flask and the redis plugin:
+```bash
+$ sudo pip install flask
+$ sudo pip install redis
+$ luarocks install redis-lua
+```
+Put you model file in online_model, rename it as 'model.t7', the start the backend and fontend script:
+```bash
+$ nohup th web_backend.lua &
+$ nohup python web_server.py &
+```
