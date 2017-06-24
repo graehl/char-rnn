@@ -1,7 +1,8 @@
+d=`dirname $0`
 set -e -x
 
 # wiki, wsj, conll_eng, conll_deu
-prefix=$1 
+prefix=$1
 
 # lstm, gru
 model=$2
@@ -27,9 +28,10 @@ if [ $size = "large" ]; then
 fi
 
 cv_dir=cv/"$prefix"_"$model"_"$rnn"hidden_"$layer"layer
-model=`ls $cv_dir/*.t7 | python best_model.py`
+model=`ls $cv_dir/*.t7 | python $d/best_model.py`
 beam=10
 samplescript=sample.lua
 
+export LUA_PATH="$d/?.lua;$LUA_PATH"
 echo "Truecasing using $model $size"
-time th $samplescript $model -beamsize $beam -verbose 0 -gpuid $gpu < $testdata > $cv_dir/output.txt
+time th $d/$samplescript $model -beamsize $beam -verbose 0 -gpuid $gpu < $testdata > $cv_dir/output.txt

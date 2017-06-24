@@ -1,3 +1,4 @@
+d=`dirname $0`
 set -e -x
 
 # wiki, wsj, conll_eng, conll_deu
@@ -39,8 +40,7 @@ mkdir -p cv/"$prefix"_"$model"_"$rnn"hidden_"$layer"layer
 rm -f $cv_dir/*
 
 echo $model $size
-d=`dirname $0`
-#LUA_PATH="$d;$LUA_PATH"
+export LUA_PATH="$d/?.lua;$LUA_PATH"
 time th $d/train.lua \
 -data_dir $data \
 -model $model \
@@ -52,5 +52,5 @@ time th $d/train.lua \
 -max_epochs $max_epochs \
 -learning_rate $learning_rate \
 -checkpoint_dir $cv_dir \
-     -gpuid $gpu  2>&1 > $cv_dir/train.out | tee $cv_dir/train.err
+     -gpuid $gpu  2>&1 | tee $cv_dir/train.log
 cat $cv_dir/train.out

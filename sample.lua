@@ -246,17 +246,19 @@ while (seed_text ~= '') do
       current_str = beamString[cc]
       current_state = vv
       current_score = beamScore[cc]
-      candidates = {chars[ii]}
-      gprint('char(' .. chars[ii] .. ')')
+      local ci = chars[ii]
+      candidates = {ci}
+      gprint('char(' .. ci .. ')')
       gprint('sco=' .. current_score .. ')')
-      if utf8.upper(chars[ii]) ~= chars[ii] and vocab[chars[ii]] ~= nil then
-        table.insert(candidates, utf8.upper(chars[ii]))
+      local ucia = utf8.upper(ci)
+      if uci ~= ci and vocab[ci] ~= nil then
+        table.insert(candidates, uci)
       end
       for jj = 1,#candidates do
         c = candidates[jj]
         this_char = torch.Tensor{vocab[c]}
         if vocab[c] == nil then this_char = torch.Tensor{vocab[UNK]} end
-        
+
         if prev_char ~= nil then
           if this_char ~= nil then
             newstr = current_str .. c
@@ -318,4 +320,3 @@ while (seed_text ~= '') do
   beststr = beststr:gsub("^%s+", ""):gsub("%s+$", "")
   io.write(beststr .. '\n') io.flush()
 end
-

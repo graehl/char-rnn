@@ -7,7 +7,7 @@ require './misc.lua'
 local CharSplitLMMinibatchLoader = {}
 CharSplitLMMinibatchLoader.__index = CharSplitLMMinibatchLoader
 
-function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, split_fractions)
+function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, split_fractions, min_freq)
     -- split_fractions is e.g. {0.9, 0.05, 0.05}
 
     local self = {}
@@ -46,10 +46,10 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
     if run_prepro then
         -- construct a tensor with all the data, and vocab file
         print('one-time setup: preprocessing input text file ' .. input_file .. '...')
-        CharSplitLMMinibatchLoader.text_to_tensor(input_file, vocab_file, tensor_file)
+        CharSplitLMMinibatchLoader.text_to_tensor(input_file, vocab_file, tensor_file, min_freq)
         -- rhs: tensor with val data
         if self.has_val_data then
-            CharSplitLMMinibatchLoader.text_to_tensor(val_input_file, vocab_file, val_tensor_file)
+            CharSplitLMMinibatchLoader.text_to_tensor(val_input_file, vocab_file, val_tensor_file, 1)
         end
     end
 
@@ -60,9 +60,9 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
     -- cut off the end so that it divides evenly
     local len = data:size(1)
     if len % (batch_size * seq_length) ~= 0 then
+        local multiples = batch_size * seq_length
         print('cutting off end of data so that the batches/sequences divide evenly')
-        data = data:sub(1, batch_size * seq_length
-                    * math.floor(len / (batch_size * seq_length)))
+        data = data:sub(1, multiples * math.floor(len / multiples))
     end
 
     local val_data
@@ -176,37 +176,40 @@ function CharSplitLMMinibatchLoader:next_batch(split_index)
     end
 end
 
+local UNK = "<unk>"
 -- *** STATIC method ***
 function VisitUtf8Chars(f, unordered)
    local len = 0
    local line
-   if unordered then
-      unordered["<unk>"] = true
-      unordered['\n'] = true
-   end
+   local nlines = 0
    while true do
      line = f:read()
      if line == nil then break end -- no more lines to read
      for char_code, char in pairs(UTF8ToCharArray(line)) do
-         if unordered and not unordered[char] then unordered[char] = true end
+         if unordered then unordered[char] = (unordered[char] or 0) + 1 end
          len = len + 1
      end
+     nlines = nlines + 1
      len = len + 1
+   end
+   if unordered then
+      unordered[UNK] = 99999
+      unordered['\n'] = nlines
    end
    return len
 end
 
-function VisitUtf8CharsOpen(f, unordered)
-   require 'pl.pretty'.dump(f)
-   f = io.open(f, "r")
+function VisitUtf8CharsOpen(filename, unordered)
+   f = assert(io.open(filename, "r"))
    local n = VisitUtf8Chars(f, unordered)
+   print('text ' .. filename .. ' had ' .. n .. ' chars including [newline]')
    f:close()
    return n
 end
 
 
 -- *** STATIC method ***
-function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, out_tensorfile)
+function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, out_tensorfile, min_freq)
     local timer = torch.Timer()
     print('loading text file...')
     local cache_len = 10000
@@ -216,7 +219,7 @@ function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, o
 
     -- create vocabulary if it doesn't exist yet
     if path.exists(out_vocabfile) then
-        print('vocab.t7 found')
+        print(out_vocabfile .. ' found')
         vocab_mapping = torch.load(out_vocabfile)
         len = VisitUtf8CharsOpen(in_textfile, nil)
         -- code snippets taken from http://lua-users.org/wiki/LuaUnicode
@@ -226,35 +229,50 @@ function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, o
         local unordered = {}
         len = VisitUtf8CharsOpen(in_textfile, unordered)
 
-        -- sort into a table (i.e. keys become 1..N)
         local ordered = {}
-        for char in pairs(unordered) do ordered[#ordered + 1] = char end
+        -- sort into a table (i.e. keys become 1..N)
+        local allfreq = 0
+        for char, c in pairs(unordered) do
+           if c >= min_freq then
+              ordered[#ordered + 1] = char
+           end
+           allfreq = allfreq + 1
+        end
         table.sort(ordered)
         -- invert `ordered` to create the char->int mapping
         for i, char in ipairs(ordered) do
             vocab_mapping[char] = i
         end
+        print(allfreq .. ' char types observed; ' .. #ordered .. ' with count >= ' .. min_freq)
+        print((allfreq - #ordered) .. ' char types with count < ' .. min_freq)
         print('saving ' .. out_vocabfile)
         torch.save(out_vocabfile, vocab_mapping)
     end
+    vocab_size = 0
+    for _ in pairs(vocab_mapping) do
+        vocab_size = vocab_size + 1
+    end
+    print('vocab has ' .. vocab_size .. ' symbols including <unk> and [newline]')
     -- construct a tensor with all the data
     print('putting data into tensor...')
     local data = torch.ByteTensor(len) -- store it into 1D first, then rearrange
-    f = io.open(in_textfile, "r")
     local currlen = 1
 
-    local f = io.open(in_textfile, "r")
+    local f = assert(io.open(in_textfile, "r"))
     local line
     while true do
       line = f:read()
       if line == nil then break end -- no more lines to read
       for char_code, char in pairs(UTF8ToCharArray(line)) do
-         data[currlen] = vocab_mapping[char] or vocab_mapping["<unk>"]
+         data[currlen] = vocab_mapping[char] or vocab_mapping[UNK]
          currlen = currlen + 1
       end
       -- don't forget end of line character it is excluded by f:read()
       data[currlen] = vocab_mapping['\n']
       currlen = currlen + 1
+      if math.fmod(currlen, 10000) == 0 then
+        print('read ' .. currlen .. ' / ' .. len)
+      end
     end
     f:close()
 
