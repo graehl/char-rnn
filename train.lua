@@ -1,14 +1,14 @@
 --[[
 
-    This file trains a character-level multi-layer RNN on text data
+This file trains a character-level multi-layer RNN on text data
 
-    Code is based on implementation in
+Code is based on implementation in
     https://github.com/oxford-cs-ml-2015/practical6
-    but modified to have multi-layer support, GPU support, as well as
-    many other common model/optimization bells and whistles.
+but modified to have multi-layer support, GPU support, as well as
+many other common model/optimization bells and whistles.
     The practical6 code is in turn based on
-    https://github.com/wojciechz/learning_to_execute
-    which is turn based on other stuff in Torch, etc... (long lineage)
+https://github.com/wojciechz/learning_to_execute
+which is turn based on other stuff in Torch, etc... (long lineage)
 
 ]]--
 
@@ -43,10 +43,21 @@ cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm,gru or rnn (recommend lstm)')
 -- adadelta optimization
-cmd:option('-adadelta', 0, 'use adadelta (default)')
+cmd:option('-adadelta', 0, 'use adadelta (uses more gpu memory)')
 cmd:option('-rho_ada', 0.9, 'adadelta rho=0.9')
 cmd:option('-eps_ada', 1e-6, 'adadelta eps=1e-6')
 cmd:option('-wd_ada', 0, 'adadelta weight decay')
+-- nag optimization
+cmd:option('-nag', 1, 'use nesterov momentum (the default)')
+cmd:option('-lr', .25, '-nag learning rate: default .25')
+cmd:option('-momentum', .99, '-nag: default .99')
+-- adam optimization
+cmd:option('-adam', 0, 'use adam')
+cmd:option('-beta1', .9, 'adam: first moment coeff')
+cmd:option('-beta2', .999, 'adam: second moment coeff')
+cmd:option('-epsilon', 1e-8, 'adam: epsilon')
+cmd:option('-lrdecay', 0, 'adam: learningRateDecay')
+cmd:option('-wdecay', 0, 'adam: weightDecay')
 ---
 cmd:option('-learning_rate',2e-3,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
@@ -85,6 +96,61 @@ math.randomseed(opt.seed)
 -- train / val / test split for data, in fractions
 local test_frac = math.max(0, 1 - (opt.train_frac + opt.val_frac))
 local split_sizes = {opt.train_frac, opt.val_frac, test_frac}
+
+--[[ (from FAIR 'fairseq') A plain implementation of Nesterov's momentum
+Implements Nesterov's momentum using the simplified
+    formulation of https://arxiv.org/pdf/1212.0901.pdf
+    ARGS:
+    - `opfunc` : a function that takes a single input (X), the point
+    of a evaluation, and returns f(X) and df/dX
+    - `x`      : the initial point
+    - `config` : a table with configuration parameters for the optimizer
+    - `config.learningRate`      : learning rate
+    - `config.momentum`          : momentum
+    - `state`  : a table describing the state of the optimizer; after each
+    call the state is modified
+    - `state.evalCounter`        : evaluation counter (optional: 0, by default)
+    RETURN:
+    - `x`     : the new x vector
+    - `f(x)`  : the function, evaluated before the update
+    (Yann Dauphin, 2016)
+]]
+local function nag(opfunc, x, config, state)
+
+    -- (0) get/update state
+    local config = config or {}
+    local state = state or config
+    local lr = config.learningRate or 1e-3
+    local l2 = config.l2 or 0
+    local mom = config.momentum or 0
+    state.evalCounter = state.evalCounter or 0
+
+    -- (1) evaluate f(x) and df/dx
+    local fx,dfdx = opfunc(x)
+
+    if not state.dfdx then
+        state.dfdx = torch.Tensor():typeAs(dfdx):resizeAs(dfdx):fill(0)
+    end
+
+    -- (2) weight decay
+    if l2 ~= 0 then
+        dfdx:add(l2, x)
+    end
+
+    -- (3) apply update
+    x:add(mom*mom, state.dfdx):add(-(1 + mom) * lr, dfdx)
+
+    -- (4) apply momentum
+    state.dfdx:mul(mom):add(-lr, dfdx)
+
+    -- (5) update evaluation counter
+    state.evalCounter = state.evalCounter + 1
+
+    -- return x*, f(x) before optimization
+    return x,{fx}
+
+end
+
 
 -- initialize cunn/cutorch for training on the GPU and fall back to CPU gracefully
 if opt.gpuid >= 0 and opt.opencl == 0 then
@@ -302,28 +368,28 @@ function feval(x)
     loss = loss / opt.seq_length
     ------------------ backward pass -------------------
     -- initialize gradient at time t to be zeros (there's no influence from future)
-    local drnn_state = {[opt.seq_length] = clone_list(init_state, true)} -- true also zeros the clones
-    for t=opt.seq_length,1,-1 do
-        -- backprop through loss, and softmax/linear
-        local doutput_t = clones.criterion[t]:backward(predictions[t], y[t])
-        table.insert(drnn_state[t], doutput_t)
-        local dlst = clones.rnn[t]:backward({x[t], unpack(rnn_state[t-1])}, drnn_state[t])
-        drnn_state[t-1] = {}
-        for k,v in pairs(dlst) do
-            if k > 1 then -- k == 1 is gradient on x, which we dont need
-                -- note we do k-1 because first item is dembeddings, and then follow the
-                -- derivatives of the state, starting at index 2. I know...
-                drnn_state[t-1][k-1] = v
-            end
+local drnn_state = {[opt.seq_length] = clone_list(init_state, true)} -- true also zeros the clones
+for t=opt.seq_length,1,-1 do
+    -- backprop through loss, and softmax/linear
+    local doutput_t = clones.criterion[t]:backward(predictions[t], y[t])
+    table.insert(drnn_state[t], doutput_t)
+    local dlst = clones.rnn[t]:backward({x[t], unpack(rnn_state[t-1])}, drnn_state[t])
+    drnn_state[t-1] = {}
+    for k,v in pairs(dlst) do
+        if k > 1 then -- k == 1 is gradient on x, which we dont need
+            -- note we do k-1 because first item is dembeddings, and then follow the
+            -- derivatives of the state, starting at index 2. I know...
+            drnn_state[t-1][k-1] = v
         end
     end
-    ------------------------ misc ----------------------
-    -- transfer final state to initial state (BPTT)
-    init_state_global = rnn_state[#rnn_state] -- NOTE: I don't think this needs to be a clone, right?
-    grad_params:div(opt.seq_length)
-    -- clip gradient element-wise
-    grad_params:clamp(-opt.grad_clip, opt.grad_clip)
-    return loss, grad_params
+end
+------------------------ misc ----------------------
+-- transfer final state to initial state (BPTT)
+init_state_global = rnn_state[#rnn_state] -- NOTE: I don't think this needs to be a clone, right?
+grad_params:div(opt.seq_length)
+-- clip gradient element-wise
+grad_params:clamp(-opt.grad_clip, opt.grad_clip)
+return loss, grad_params
 end
 
 -- start optimization here
@@ -335,6 +401,10 @@ local iterations_per_epoch = loader.ntrain
 local loss0 = nil
 local adaconfig = {rho = opt.rho_ada, eps = opt.eps_ada, wd= opt.wd_ada}
 local adastate = {}
+local nagparams = {momentum = opt.momentum, learningRate = opt.lr}
+local nagstate = {}
+local adamparams = {beta1 = opt.beta1, beta2 = opt.beta2, learningRate = opt.learning_rate, learningRateDecay = opt.lrdecay, weightDecay = opt.wdecay, epsilon = opt.epsilon}
+local adamstate = {}
 ss_current = opt.start_ss
 for i = 1, iterations do
     local epoch = i / loader.ntrain
@@ -342,7 +412,11 @@ for i = 1, iterations do
     local timer = torch.Timer()
     local loss
     if opt.adadelta > 0 then
-        _, loss = optim.adadelta(feval, adaconfig, adastate)
+        _, loss = optim.adadelta(feval, params, adaconfig, adastate)
+    elseif opt.adam > 0 then
+        _, loss = optim.adam(feval, params, adamconfig, adamstate)
+    elseif opt.nag > 0 then
+        _, loss = nag(feval, params, nagconfig, nagstate)
     else
         _, loss = optim.rmsprop(feval, params, optim_state)
     end

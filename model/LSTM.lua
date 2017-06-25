@@ -1,3 +1,12 @@
+--[[
+' = prev timestep
+zt = g(Wz xt + Rz yt' + bz) [g,h = tanh] usually
+it = σ(Wi xt + Ri yt' + pi ⊙ ct' + bi)
+ft = σ(Wf xt + Rf yt' + pf ⊙ ct' + bf)
+ct = it⊙zt + ft⊙ct'
+ot = σ(Wo xt + R yt' + p⊙ct + bo)
+yt = ot⊙h(ct)
+]]--
 local LSTM = {}
 function LSTM.lstm(input_size, rnn_size, n, dropout, bn)
     dropout = dropout or 0
