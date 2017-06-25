@@ -1,4 +1,10 @@
 --[[
+n = # of time steps unrolled?
+
+nopeep: remove peephole connections p* ⊙ ct: doesn't hurt perf.
+couple_input: ft = 1 − it. doesn't hurt perf (task dep?).
+no_input: don't use it (bad for seq->seq, ok for LM?)
+
 ' = prev timestep
 zt = g(Wz xt + Rz yt' + bz) [g,h = tanh] usually
 it = σ(Wi xt + Ri yt' + pi ⊙ ct' + bi)
@@ -8,7 +14,7 @@ ot = σ(Wo xt + R yt' + p⊙ct + bo)
 yt = ot⊙h(ct)
 ]]--
 local LSTM = {}
-function LSTM.lstm(input_size, rnn_size, n, dropout, bn)
+function LSTM.lstm(input_size, rnn_size, n, dropout, bn, nopeep, couple_input, no_input)
     dropout = dropout or 0
 
     -- there will be 2*n+1 inputs
@@ -94,10 +100,11 @@ function LSTM.lstm(input_size, rnn_size, n, dropout, bn)
                 nn.CMulTable()({in_gate, in_transform})
                                      })
         -- gated cells form the output
-        local next_h = nn.CMulTable()({out_gate, nn.Tanh()(next_c)})
+        local bnc = next_c
         if bn then
-            next_h = next_h(bn_c(next_c):annotate {name=('bn_c_' .. L)})
+            bnc = bn_c(next_c):annotate { name = 'bn_c_' .. L }
         end
+        local next_h = nn.CMulTable()({out_gate, nn.Tanh()(bnc)})
         table.insert(outputs, next_c)
         table.insert(outputs, next_h)
     end

@@ -42,6 +42,14 @@ cmd:option('-min_freq',10,'treat as unk any chars w/ count below this')
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm,gru or rnn (recommend lstm)')
+cmd:option('-bn', 0, 'batch normalization for LSTM')
+cmd:option('-nopeep', 0, '-model lstm: disable peepholes')
+cmd:option('-couple_input', 0, '-model lstm: set input gate = 1 - forget')
+cmd:option('-no_input', 0, '-model lstm: no input gate')
+
+cmd:option('-bn_eps', 1e-5, '-bn: epsilon')
+cmd:option('-bn_momentum', 1e-5, '-bn: momentum')
+cmd:option('-bn_affine', 1, '-bn: affine (boolean)')
 -- adadelta optimization
 cmd:option('-adadelta', 0, 'use adadelta (uses more gpu memory)')
 cmd:option('-rho_ada', 0.9, 'adadelta rho=0.9')
@@ -59,7 +67,7 @@ cmd:option('-epsilon', 1e-8, 'adam: epsilon')
 cmd:option('-lrdecay', 0, 'adam: learningRateDecay')
 cmd:option('-wdecay', 0, 'adam: weightDecay')
 ---
-cmd:option('-learning_rate',2e-3,'learning rate')
+cmd:option('-learning_rate',2e-2,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
@@ -226,7 +234,7 @@ else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
     protos = {}
     if opt.model == 'lstm' then
-        protos.rnn = LSTM.lstm(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout)
+        protos.rnn = LSTM.lstm(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout, opt.bn > 0, opt.nopeep > 0, opt.couple_input > 0, opt.no_input > 0)
     elseif opt.model == 'gru' then
         protos.rnn = GRU.gru(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout)
     elseif opt.model == 'rnn' then
