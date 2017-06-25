@@ -196,7 +196,7 @@ function VisitUtf8Chars(f, unordered)
         len = len + 1
     end
     if unordered then
-        unordered[UNK] = 99999
+        unordered[UNK] = 9999999
         unordered['\n'] = nlines
     end
     return len

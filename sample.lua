@@ -58,6 +58,14 @@ function utf8chars(str)
     return t
 end
 
+function vdot(v, n)
+    if math.fmod(n, 10) == 0 and opt.verbose >= v then
+        io.stderr:write('.')
+        if math.fmod(n, 1000) == 0 then io.stderr:write(n .. '\n') end
+        io:flush()
+    end
+end
+
 -- gated print: simple utility function wrapping a print
 function vprint(v, str)
     if opt.verbose >= v then
@@ -147,7 +155,9 @@ local nvocab = 0
 for c,i in pairs(vocab) do
     ivocab[i] = c
     nvocab = nvocab + 1
-    vprint(2, c .. ' ' .. i)
+end
+for i = 1,#ivocab do
+    vprint2(2, ivocab[i], ' ', i)
 end
 local VUNK = vocab[UNK]
 gprint("vocab has " .. nvocab .. " items including unk/newline")
@@ -173,21 +183,8 @@ end
 state_size = #current_state
 default_state = clone_state(current_state)
 
--- Initialization
---[[
 local seed_text = opt.primetext
-]]--
-
-local seed_text = opt.primetext
-if opt.stdin then
-    seed_text = ''
-    local stexts = {}
-    while true do
-        local line = io.read()
-        if line == nil then break end
-        seed_text = seed_text .. '\n' .. line
-    end
-elseif not seed_text then
+if not opt.stdin and not seed_text then
     gprint('missing seed text, using uniform probability over first character')
     gprint('--------------------------')
 end
@@ -197,14 +194,26 @@ if opt.gpuid >= 0 and opt.opencl == 0 then prediction = prediction:cuda() end
 if opt.gpuid >= 0 and opt.opencl == 1 then prediction = prediction:cl() end
 
 if opt.stdin then
-    gprint("-stdin 1 => recasing stdin")
+    vprint2(1, "recasing stdin (. = 10 lines, line of . = 1000 lines)")
     -- start sampling/argmaxing
-    while (seed_text ~= '') do
-        stext = seed_text
-        seed_text = ''
+    local lineno = 0
+    local lineagain = nil
+    while true do
+        local line
+        if lineagain == nil then
+            line = io.read()
+            if line == nil then break end
+            line = line .. '\n'
+            if lineno == 0 then
+                lineagain = line
+            end
+        else
+            line = lineagain
+            lineagain = nil
+        end
 
-        vprint2(3, 'processing ', stext)
-        chars = utf8chars(stext, '.')
+        vprint2(3, 'processing ', line)
+        chars = utf8chars(line)
 
         beamsize = opt.beamsize
         beamState = {}
@@ -215,11 +224,11 @@ if opt.stdin then
         beamState[1] = clone_state(current_state)
         beamScore[1] = 0
         beamString[1] = ''
-
-        ii = 1
+        vprint2(3, '#chars to process = ', #chars)
         prev_char = nil
-        while ii <= #chars do
-
+        lineno = lineno + 1
+        vdot(1, lineno)
+        for ii = 1,#chars do
             newBeamState = {}
             newBeamScore = {}
             newBeamString = {}
@@ -231,7 +240,7 @@ if opt.stdin then
             for _, _ in pairs(beamState) do beamSize = beamSize+1 end
             prev_chars = torch.CudaTensor(beamSize)
             current_states = {}
-            for i=1,state_size do
+            for i = 1, state_size do
                 table.insert(current_states, torch.CudaTensor(beamSize, checkpoint.opt.rnn_size))
             end
 
@@ -244,14 +253,9 @@ if opt.stdin then
 
                 strlen = utf8.len(current_str)
                 if strlen > 0 then
-                    bb = beamLastChar[cc]
-                    if vocab[ bb ] == nil then
-                        prev_char = torch.Tensor{vocab[UNK]}
-                        prev_chars[cnt] = vocab[UNK]
-                    else
-                        prev_char = torch.Tensor{ vocab[ bb ] }
-                        prev_chars[cnt] = vocab[bb]
-                    end
+                    local vbb = beamLastChar[cc]
+                    prev_char = torch.Tensor{vbb}
+                    prev_chars[cnt] = vbb
                 else
                     prev_char = nil
                 end
@@ -284,7 +288,7 @@ if opt.stdin then
                     local uci = utf8.upper(ci)
                     if uci ~= ci then
                         local vuci = vocab[uci]
-                        vprint2(2, 'char(', ci, ')=>', vci, ' uchar(', uci, ')=>', vuci, ' currentsco= ', current_score, ')')
+                        vprint2(2, '#', ii, ' char(', ci, ')=>', vci, ' uchar(', uci, ')=>', vuci, ' currentsco= ', current_score, ')')
                         table.insert(candidates, vuci)
                     end
                 end
@@ -312,7 +316,7 @@ if opt.stdin then
                     newBeamState[beam_index] = clone_state(new_state)
                     newBeamScore[beam_index] = newsco
                     newBeamString[beam_index] = newstr
-                    newBeamLastChar[beam_index] = c
+                    newBeamLastChar[beam_index] = vc
                     beam_index = beam_index + 1
                     table.insert(scores, newsco)
                 end
@@ -325,9 +329,8 @@ if opt.stdin then
             beamString = {}
             beamLastChar = {}
 
-            cnt = 0
             tid = #scores - beamsize + 1
-            if tid<1 then tid = 1 end
+            if tid < 1 then tid = 1 end
             threshold = scores[tid]
             for cc,vv in pairs(newBeamScore) do
                 vprint2(2, 'Beam State:(', cc, ',', vv, ') threshold=', threshold, ')')
@@ -336,10 +339,8 @@ if opt.stdin then
                     beamScore[cc] = newBeamScore[cc]
                     beamString[cc] = newBeamString[cc]
                     beamLastChar[cc] = newBeamLastChar[cc]
-                    cnt = cnt + 1
                 end
             end
-            ii = ii + 1
         end
         threshold = scores[#scores]
         beststr = nil
@@ -349,8 +350,10 @@ if opt.stdin then
                 current_state = newBeamState[cc]
             end
         end
-        beststr = beststr:gsub("^%s+", ""):gsub("%s+$", "")
-        io.write(beststr .. '\n') io.flush()
+        if lineagain == nil then
+            io.write(beststr)
+            io.flush()
+        end
     end
 else
     -- start sampling/argmaxing
