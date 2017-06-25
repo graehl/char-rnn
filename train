@@ -1,0 +1,3 @@
+#!/bin/bash
+d=`dirname $0`
+LUA_PATH="$d/?.lua;$LUA_PATH" th $d/train.lua "$@"
