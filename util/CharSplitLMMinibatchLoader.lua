@@ -59,8 +59,8 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
 
     -- cut off the end so that it divides evenly
     local len = data:size(1)
+    local multiples = batch_size * seq_length
     if len % (batch_size * seq_length) ~= 0 then
-        local multiples = batch_size * seq_length
         print('cutting off end of data so that the batches/sequences divide evenly')
         data = data:sub(1, multiples * math.floor(len / multiples))
     end
@@ -70,10 +70,11 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
     if self.has_val_data then
         val_data = torch.load(val_tensor_file)
         len = val_data:size(1)
-        if len % (batch_size * seq_length) ~= 0 then
+        assert(len > multiples)
+        if len % multiples ~= 0 then
             print('cutting off end of data so that the batches/sequences divide evenly')
             val_data = val_data:sub(1, batch_size * seq_length
-                                        * math.floor(len / (batch_size * seq_length)))
+                                        * math.floor(len / multiples))
         end
     end
 

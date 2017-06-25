@@ -43,10 +43,10 @@ cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm,gru or rnn (recommend lstm)')
 -- adadelta optimization
-cmd:option('-adadelta', 1, 'use adadelta (default)')
-cmd:option('rho_ada', 0.9, 'adadelta rho=0.9')
-cmd:option('eps_ada', 1e-6, 'adadelta eps=1e-6')
-cmd:option('wd_ada', 0, 'adadelta weight decay')
+cmd:option('-adadelta', 0, 'use adadelta (default)')
+cmd:option('-rho_ada', 0.9, 'adadelta rho=0.9')
+cmd:option('-eps_ada', 1e-6, 'adadelta eps=1e-6')
+cmd:option('-wd_ada', 0, 'adadelta weight decay')
 ---
 cmd:option('-learning_rate',2e-3,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
@@ -209,6 +209,9 @@ if opt.model == 'lstm' then
     end
 end
 
+if opt.adadelta > 0 then
+    print('adadelta=' .. opt.adadelta)
+end
 print('number of parameters in the model: ' .. params:nElement())
 -- make a bunch of clones after flattening, as that reallocates memory
 clones = {}
@@ -338,7 +341,7 @@ for i = 1, iterations do
 
     local timer = torch.Timer()
     local loss
-    if opt.adadelta then
+    if opt.adadelta > 0 then
         _, loss = optim.adadelta(feval, adaconfig, adastate)
     else
         _, loss = optim.rmsprop(feval, params, optim_state)

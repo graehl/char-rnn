@@ -36,7 +36,7 @@ fi
 
 cv_dir=${cv_dir:-cv/"$prefix"_"$model"_"$rnn"hidden_"$layer"layer}
 model=`ls $cv_dir/*.t7 | python $d/best_model.py`
-beam=${beam:-4}
+beam=${beam:-8}
 samplescript=sample.lua
 
 export LUA_PATH="$d/?.lua;$LUA_PATH"
