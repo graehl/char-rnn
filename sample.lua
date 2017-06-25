@@ -201,6 +201,7 @@ if opt.stdin then
     local lineno = 0
     local predictions = nil
     local lineagain = nil
+    local prev_char = nil
     while true do
         local line
         if lineagain == nil then
@@ -228,7 +229,6 @@ if opt.stdin then
         beamScore[1] = 0
         beamString[1] = ''
         vprint2(3, '#chars to process = ', #chars)
-        prev_char = nil
         lineno = lineno + 1
         vdot(1, lineno)
         firstcap = true

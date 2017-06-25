@@ -48,7 +48,7 @@ cmd:option('-couple_input', 0, '-model lstm: set input gate = 1 - forget')
 cmd:option('-no_input', 0, '-model lstm: no input gate')
 
 cmd:option('-bn_eps', 1e-5, '-bn: epsilon')
-cmd:option('-bn_momentum', 1e-5, '-bn: momentum')
+cmd:option('-bn_momentum', 0.1, '-bn: momentum')
 cmd:option('-bn_affine', 1, '-bn: affine (boolean)')
 -- adadelta optimization
 cmd:option('-adadelta', 0, 'use adadelta (uses more gpu memory)')
@@ -234,7 +234,7 @@ else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
     protos = {}
     if opt.model == 'lstm' then
-        protos.rnn = LSTM.lstm(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout, opt.bn > 0, opt.nopeep > 0, opt.couple_input > 0, opt.no_input > 0)
+        protos.rnn = LSTM.lstm(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout, opt)
     elseif opt.model == 'gru' then
         protos.rnn = GRU.gru(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout)
     elseif opt.model == 'rnn' then
@@ -277,15 +277,16 @@ if opt.model == 'lstm' then
             if node.data.annotations.name == "i2h_" .. layer_idx then
                 print('setting forget gate biases to 1 in LSTM layer ' .. layer_idx)
                 -- the gates are, in order, i,f,o,g, so f is the 2nd block of weights
-                node.data.module.bias[{{opt.rnn_size+1, 2*opt.rnn_size}}]:fill(1.0)
+                forget_biases = node.data.module.bias[{{opt.rnn_size+1, 2*opt.rnn_size}}]
+                forget_biases:uniform(1.1, 1.5) -- don't forget until you give remembering a chance
+                -- http://jmlr.org/proceedings/papers/v37/jozefowicz15.pdf - and
+                -- if you didn't already learn a bias, a constant bias of 1
+                -- would be useful (for forget gates only).
             end
         end
     end
 end
 
-if opt.adadelta > 0 then
-    print('adadelta=' .. opt.adadelta)
-end
 print('number of parameters in the model: ' .. params:nElement())
 -- make a bunch of clones after flattening, as that reallocates memory
 clones = {}
@@ -339,6 +340,7 @@ function eval_split(split_index, max_batches)
     end
 
     loss = loss / opt.seq_length / n
+    print('loss['..split_index..'] = '..loss)
     return loss
 end
 
@@ -414,18 +416,28 @@ local nagstate = {}
 local adamparams = {beta1 = opt.beta1, beta2 = opt.beta2, learningRate = opt.learning_rate, learningRateDecay = opt.lrdecay, weightDecay = opt.wdecay, epsilon = opt.epsilon}
 local adamstate = {}
 ss_current = opt.start_ss
+
+local function false0(x)
+    return not (not x or x == 0)
+end
+
+local adadelta = false0(opt.adadelta)
+local adam = false0(opt.adam)
+local nag = false0(opt.nag)
+local rmsprop = not (adadelta or adam or nag)
 for i = 1, iterations do
     local epoch = i / loader.ntrain
 
     local timer = torch.Timer()
     local loss
-    if opt.adadelta > 0 then
+    if adadelta then
         _, loss = optim.adadelta(feval, params, adaconfig, adastate)
-    elseif opt.adam > 0 then
+    elseif adam then
         _, loss = optim.adam(feval, params, adamconfig, adamstate)
-    elseif opt.nag > 0 then
+    elseif nag then
         _, loss = nag(feval, params, nagconfig, nagstate)
     else
+        assert(rmsprop)
         _, loss = optim.rmsprop(feval, params, optim_state)
     end
     if opt.accurate_gpu_timing == 1 and opt.gpuid >= 0 then
@@ -442,7 +454,7 @@ for i = 1, iterations do
     train_losses[i] = train_loss
 
     -- exponential learning rate decay
-    if i % loader.ntrain == 0 and opt.learning_rate_decay < 1 then
+    if rmsprop and i % loader.ntrain == 0 and opt.learning_rate_decay < 1 then
         if epoch >= opt.learning_rate_decay_after then
             local decay_factor = opt.learning_rate_decay
             optim_state.learningRate = optim_state.learningRate * decay_factor -- decay it

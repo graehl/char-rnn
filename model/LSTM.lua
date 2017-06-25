@@ -1,9 +1,14 @@
 --[[
 n = # of time steps unrolled?
 
-nopeep: remove peephole connections p* ⊙ ct: doesn't hurt perf.
-couple_input: ft = 1 − it. doesn't hurt perf (task dep?).
-no_input: don't use it (bad for seq->seq, ok for LM?)
+config: {bn=False --enable/disable batch norm
+         ,bn_momentum=0.1 -- bn momentum
+         ,bn_eps=1e-5 -- bn epsilon
+         ,bn_affine=True -- bn learn some linear stuff
+         ,nopeep=True -- remove peephole connections p* ⊙ ct: doesn't hurt perf.
+         ,couple_input=False -- (forget) it = 1-ft (input) gate. supposedly doesn't hurt perf (task dep?).
+         ,no_input=False -- don't use it (input gate) (bad for seq->seq, ok for LM?)
+        }
 
 ' = prev timestep
 zt = g(Wz xt + Rz yt' + bz) [g,h = tanh] usually
@@ -14,9 +19,21 @@ ot = σ(Wo xt + R yt' + p⊙ct + bo)
 yt = ot⊙h(ct)
 ]]--
 local LSTM = {}
-function LSTM.lstm(input_size, rnn_size, n, dropout, bn, nopeep, couple_input, no_input)
-    dropout = dropout or 0
 
+local function false0(x)
+    return not (not x or x == 0)
+end
+
+function LSTM.lstm(input_size, rnn_size, n, dropout, config)
+    dropout = dropout or 0
+    local noconfig = not config
+    local bn = false0(noconfig and 0 or config.bn)
+    local no_input = false0(noconfig and 0 or config.no_input)
+    local nopeep = (config and false0(config.nopeep)) or True
+    local couple_input = false0(noconfig and 0 or config.couple_input)
+    local bn_affine = false0(noconfig and 0 or config.bn_affine)
+    local bn_momentum = (config and config.bn_momentum) or 0.1
+    local bn_eps = (config and config.bn_eps) or 1e-5
     -- there will be 2*n+1 inputs
     local inputs = {}
     table.insert(inputs, nn.Identity()()) -- x
@@ -53,9 +70,9 @@ function LSTM.lstm(input_size, rnn_size, n, dropout, bn, nopeep, couple_input, n
         -- http://arxiv.org/abs/1603.09025
         local bn_wx, bn_wh, bn_c
         if bn then
-            bn_wx = nn.BatchNormalization(4 * rnn_size, 1e-5, 0.1, true)
-            bn_wh = nn.BatchNormalization(4 * rnn_size, 1e-5, 0.1, true)
-            bn_c = nn.BatchNormalization(rnn_size, 1e-5, 0.1, true)
+            bn_wx = nn.BatchNormalization(4 * rnn_size, bn_eps, bn_eps, bn_affine)
+            bn_wh = nn.BatchNormalization(4 * rnn_size, bn_eps, bn_eps, bn_affine)
+            bn_c = nn.BatchNormalization(rnn_size, bn_eps, bn_eps, bn_affine)
 
             -- initialise beta=0, gamma=0.1
             bn_wx.weight:fill(0.1)
