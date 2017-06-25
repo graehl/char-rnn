@@ -32,13 +32,22 @@ cmd:text('Train a character-level language model')
 cmd:text()
 cmd:text('Options')
 -- data
+local rho = config.rho or 0.9
+local eps = config.eps or 1e-6
+local wd = config.weightDecay or 0
+
 cmd:option('-data_dir','data/tinyshakespeare','data directory. Should contain the file input.txt with input data')
 cmd:option('-min_freq',10,'treat as unk any chars w/ count below this')
 -- model params
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm,gru or rnn (recommend lstm)')
--- optimization
+-- adadelta optimization
+cmd:option('-adadelta', 1, 'use adadelta (default)')
+cmd:option('rho_ada', 0.9, 'adadelta rho=0.9')
+cmd:option('eps_ada', 1e-6, 'adadelta eps=1e-6')
+cmd:option('wd_ada', 0, 'adadelta weight decay')
+---
 cmd:option('-learning_rate',2e-3,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start decaying the learning rate')
@@ -47,7 +56,7 @@ cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden 
 cmd:option('-seq_length',50,'number of timesteps to unroll for')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
 cmd:option('-max_epochs',50,'number of full passes through the training data')
-cmd:option('-grad_clip',5,'clip gradients at this value')
+cmd:option('-grad_clip',0.1,'clip gradients at this value per seq_length')
 cmd:option('-train_frac',0.95,'fraction of data that goes into train set')
 cmd:option('-val_frac',0.05,'fraction of data that goes into validation set')
 -- test_frac will be computed as (1 - train_frac - val_frac)
@@ -308,7 +317,7 @@ function feval(x)
     ------------------------ misc ----------------------
     -- transfer final state to initial state (BPTT)
     init_state_global = rnn_state[#rnn_state] -- NOTE: I don't think this needs to be a clone, right?
-    -- grad_params:div(opt.seq_length) -- this line should be here but since we use rmsprop it would have no effect. Removing for efficiency
+    grad_params:div(opt.seq_length)
     -- clip gradient element-wise
     grad_params:clamp(-opt.grad_clip, opt.grad_clip)
     return loss, grad_params
@@ -321,12 +330,19 @@ local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
 local iterations = opt.max_epochs * loader.ntrain
 local iterations_per_epoch = loader.ntrain
 local loss0 = nil
+local adaconfig = {rho = opt.rho_ada, eps = opt.eps_ada, wd= opt.wd_ada}
+local adastate = {}
 ss_current = opt.start_ss
 for i = 1, iterations do
     local epoch = i / loader.ntrain
 
     local timer = torch.Timer()
-    local _, loss = optim.rmsprop(feval, params, optim_state)
+    local loss
+    if opt.adadelta then
+        _, loss = optim.adadelta(feval, adaconfig, adastate)
+    else
+        _, loss = optim.rmsprop(feval, params, optim_state)
+    end
     if opt.accurate_gpu_timing == 1 and opt.gpuid >= 0 then
         --[[
             Note on timing: The reported time can be off because the GPU is invoked async. If one

@@ -36,7 +36,7 @@ fi
 
 cv_dir=${cv_dir:-cv/"$prefix"_"$model"_"$rnn"hidden_"$layer"layer}
 model=`ls $cv_dir/*.t7 | python $d/best_model.py`
-beam=10
+beam=${beam:-4}
 samplescript=sample.lua
 
 export LUA_PATH="$d/?.lua;$LUA_PATH"
@@ -45,6 +45,8 @@ echo "Truecasing using $model $size to $output"
 main() {
     wc -l $testdata
     time th $d/$samplescript $model -beamsize $beam -verbose ${verbose:-1} -gpuid $gpu < $testdata > $output
+    set -x
     time python $d/word_eval.py $gold $output
+    head $output
 }
 main && exit 0 || exit 1

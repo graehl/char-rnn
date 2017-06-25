@@ -43,7 +43,7 @@ cmd:option('-verbose',1,'set to 0 to ONLY print the sampled text, no diagnostics
 cmd:option('-beamsize',1,'defaults to 1')
 cmd:option('-stop','\n\n\n\n\n','stop sampling when this string (5 newlines by default) is detected')
 cmd:option('-stdin',1,"if true, ignore primetext and take stdin and generate (beam search) alternative capitalizations")
-cmd:option('-bonusfirstcap',1000,'if >0, encourage first uppercaseable letter to be uppercase with this positive reward (default 1000)')
+cmd:option('-bonusfirstcap', 10,'if >0, encourage first uppercaseable letter to be uppercase with this positive reward (default 10)')
 cmd:option('-lcinput', 1, 'if true, force lowercase the input first')
 cmd:text()
 
@@ -199,6 +199,7 @@ if opt.stdin then
     vprint2(1, "recasing stdin (. = 10 lines, line of . = 1000 lines)")
     -- start sampling/argmaxing
     local lineno = 0
+    local predictions = nil
     local lineagain = nil
     while true do
         local line
@@ -269,8 +270,6 @@ if opt.stdin then
                 cnt = cnt+1
             end
 
-            cnt = 1
-
             new_states = {}
             predictions = nil
             if prev_char ~= nil then
@@ -279,57 +278,62 @@ if opt.stdin then
                 predictions = lst[#lst] -- last element holds the log probabilities
                 predictions:div(opt.temperature) -- scale by temperature
             end
+            local c = chars[ii]
+            if opt.lcinput then
+                local li = utf8.lower(c)
+                if vocab[li] then
+                    c = li
+                end
+            end
+            local vc = vocab[c] or VUNK
+            local uc = utf8.upper(c)
+            local vuc
+            local nc = 1
+            if uc ~= c then
+                vuc = vocab[uc]
+                if vuc then
+                    vprint2(3, '#', ii, ' char(', c, ')=>', vc, ' uchar(', uc, ')=>', vuc)
+                    nc = nc + 1
+                end
+            end
 
+            cnt = 1
             for cc, vv in pairs(beamState) do
                 current_str = beamString[cc]
                 current_state = vv
                 current_score = beamScore[cc]
-                local ci = chars[ii]
-                if opt.lcinput then
-                    local li = utf8.lower(ci)
-                    if vocab[li] then
-                        ci = li
+                local vch = vc
+                local ch = c
+                local pred = prev_char and predictions[cnt]
+                for jj = 1,nc do
+                    if jj == 2 then
+                        vch = vuc
+                        ch = uc
                     end
-                end
-                local vci = vocab[ci] or VUNK
-                candidates = {vci}
-                if vci ~= VUNK then
-                    local uci = utf8.upper(ci)
-                    if uci ~= ci then
-                        local vuci = vocab[uci]
-                        if vuci then
-                            vprint2(2, '#', ii, ' char(', ci, ')=>', vci, ' uchar(', uci, ')=>', vuci, ' currentsco= ', current_score, ')')
-                            table.insert(candidates, vuci)
-                        end
+                    this_char = assert(torch.Tensor{vch})
+                    newstr = current_str .. ch
+                    if jj == 2 and firstcap then
+                        firstcap = false
+                        current_score = current_score + opt.bonusfirstcap
                     end
-                end
-                for jj = 1,#candidates do
-                    vc = candidates[jj]
-                    c = assert(ivocab[vc])
-                    this_char = torch.Tensor{vc}
                     if prev_char ~= nil then
-                        newstr = current_str .. c
-                        newsco = current_score + predictions[cnt][this_char[1]]
-                        if jj == 2 and firstcap then
-                            firstcap = false
-                            newsco = newsco + opt.bonusfirstcap
-                        end
+                        local thissco = pred[this_char[1]]
+                        vprint2(3, '\ttesting \'', ch, '\' score = ', current_score, ' + ', thissco)
+                        newsco = current_score + thissco
                         new_state = {}
                         local state = torch.zeros(1, checkpoint.opt.rnn_size)
                         for i=1,state_size do
                             table.insert(new_state, state:clone():copy(new_states[i][cnt]))
                         end
-                        vprint2(2, '\ttesting \'', c, '\' score = ', predictions[cnt][this_char[1]] )
                     else
-                        vprint2(2, '\ttesting \'', c, '\'')
+                        vprint2(3, '\ttesting \'', ch, '\'')
                         new_state = default_state
-                        newstr = current_str .. c
                         newsco = current_score
                     end
                     newBeamState[beam_index] = clone_state(new_state)
                     newBeamScore[beam_index] = newsco
                     newBeamString[beam_index] = newstr
-                    newBeamLastChar[beam_index] = vc
+                    newBeamLastChar[beam_index] = vch
                     beam_index = beam_index + 1
                     table.insert(scores, newsco)
                 end
@@ -346,8 +350,8 @@ if opt.stdin then
             if tid < 1 then tid = 1 end
             threshold = scores[tid]
             for cc,vv in pairs(newBeamScore) do
-                vprint2(2, 'Beam State:(', cc, ',', vv, ') threshold=', threshold, ')')
                 if vv >= threshold then
+                    vprint2(3, 'Kept beam State:(', cc, ',', vv, ') threshold=', threshold, ')')
                     beamState[cc] = newBeamState[cc]
                     beamScore[cc] = newBeamScore[cc]
                     beamString[cc] = newBeamString[cc]
@@ -355,15 +359,16 @@ if opt.stdin then
                 end
             end
         end
-        threshold = scores[#scores]
+        local best = scores[#scores]
         beststr = nil
         for cc,vv in pairs(newBeamScore) do
-            if vv == threshold then
+            if vv == best then
                 beststr = newBeamString[cc]
                 current_state = newBeamState[cc]
             end
         end
         if lineagain == nil then
+            vprint2(2, best, "(1-best); ", threshold, "(", beamsize, "-best)")
             io.write(beststr)
             io.flush()
         end
