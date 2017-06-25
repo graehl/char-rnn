@@ -19,11 +19,18 @@ if [ "$#" -ne 4 ] ; then
 fi
 
 data=data/$prefix
+gold=$data/test.txt
 testdata=$data/test.lower.txt
-rnn=300
+rnn=384
 layer=2
-if [ $size = "large" ]; then
+if [ $size = "oldlarge" ]; then
   rnn=700
+  layer=3
+elif [[ $size = oldsmall ]] ; then
+    rnn=300
+    layer=2
+elif [ $size = "large" ]; then
+  rnn=768
   layer=3
 fi
 
@@ -35,4 +42,9 @@ samplescript=sample.lua
 export LUA_PATH="$d/?.lua;$LUA_PATH"
 output=$cv_dir/output.txt
 echo "Truecasing using $model $size to $output"
-time th $d/$samplescript $model -beamsize $beam -verbose ${verbose:-1} -gpuid $gpu < $testdata > $output
+main() {
+    wc -l $testdata
+    time th $d/$samplescript $model -beamsize $beam -verbose ${verbose:-1} -gpuid $gpu < $testdata > $output
+    time python $d/word_eval.py $gold $output
+}
+main && exit 0 || exit 1

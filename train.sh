@@ -19,9 +19,9 @@ if [ "$#" -ne 4 ] ; then
 fi
 
 # Hyperparameters
-drop=0.25
+drop=0.2
 batch_size=64
-seq_len=48
+seq_len=96
 data=data/$prefix
 max_epochs=30
 learning_rate=0.002

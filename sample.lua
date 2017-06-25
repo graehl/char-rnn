@@ -43,6 +43,8 @@ cmd:option('-verbose',1,'set to 0 to ONLY print the sampled text, no diagnostics
 cmd:option('-beamsize',1,'defaults to 1')
 cmd:option('-stop','\n\n\n\n\n','stop sampling when this string (5 newlines by default) is detected')
 cmd:option('-stdin',1,"if true, ignore primetext and take stdin and generate (beam search) alternative capitalizations")
+cmd:option('-bonusfirstcap',1000,'if >0, encourage first uppercaseable letter to be uppercase with this positive reward (default 1000)')
+cmd:option('-lcinput', 1, 'if true, force lowercase the input first')
 cmd:text()
 
 -- parse input params
@@ -228,6 +230,7 @@ if opt.stdin then
         prev_char = nil
         lineno = lineno + 1
         vdot(1, lineno)
+        firstcap = true
         for ii = 1,#chars do
             newBeamState = {}
             newBeamScore = {}
@@ -282,14 +285,22 @@ if opt.stdin then
                 current_state = vv
                 current_score = beamScore[cc]
                 local ci = chars[ii]
+                if opt.lcinput then
+                    local li = utf8.lower(ci)
+                    if vocab[li] then
+                        ci = li
+                    end
+                end
                 local vci = vocab[ci] or VUNK
                 candidates = {vci}
                 if vci ~= VUNK then
                     local uci = utf8.upper(ci)
                     if uci ~= ci then
                         local vuci = vocab[uci]
-                        vprint2(2, '#', ii, ' char(', ci, ')=>', vci, ' uchar(', uci, ')=>', vuci, ' currentsco= ', current_score, ')')
-                        table.insert(candidates, vuci)
+                        if vuci then
+                            vprint2(2, '#', ii, ' char(', ci, ')=>', vci, ' uchar(', uci, ')=>', vuci, ' currentsco= ', current_score, ')')
+                            table.insert(candidates, vuci)
+                        end
                     end
                 end
                 for jj = 1,#candidates do
@@ -297,9 +308,11 @@ if opt.stdin then
                     c = assert(ivocab[vc])
                     this_char = torch.Tensor{vc}
                     if prev_char ~= nil then
-                        if this_char ~= nil then
-                            newstr = current_str .. c
-                            newsco = current_score + predictions[cnt][this_char[1]]
+                        newstr = current_str .. c
+                        newsco = current_score + predictions[cnt][this_char[1]]
+                        if jj == 2 and firstcap then
+                            firstcap = false
+                            newsco = newsco + opt.bonusfirstcap
                         end
                         new_state = {}
                         local state = torch.zeros(1, checkpoint.opt.rnn_size)
