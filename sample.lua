@@ -198,10 +198,8 @@ if opt.gpuid >= 0 and opt.opencl == 1 then prediction = prediction:cl() end
 local function concatreversed(t)
     local r = ''
     while t do
-        if t[0] then
-            r = t[0] .. r
-        end
-        t = t[1]
+        r = t[1] .. r
+        t = t[2]
     end
     return r
 end
@@ -321,7 +319,7 @@ if opt.stdin then
                         ch = uc
                     end
                     this_char = assert(torch.Tensor{vch})
-                    newstr = {[0] = ch, [1] = current_str}
+                    newstr = {ch, current_str}
                     if jj == 2 and firstcap then
                         firstcap = false
                         current_score = current_score + opt.bonusfirstcap
