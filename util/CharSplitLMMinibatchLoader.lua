@@ -45,7 +45,7 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
         local input_attr = lfs.attributes(input_file)
         local vocab_attr = lfs.attributes(vocab_file)
         local tensor_attr = lfs.attributes(tensor_file)
-        if input_attr.modification > vocab_attr.modification or input_attr.modification > tensor_attr.modification then
+        if not vocab_attr or not tensor_attr or input_attr.modification > vocab_attr.modification or input_attr.modification > tensor_attr.modification then
             print('vocab.t7 or data.t7 detected as stale. Re-running preprocessing...')
             run_prepro = true
         end

@@ -14,8 +14,8 @@ output=$cv_dir/output.txt
 echo "Truecasing using $model $size to $output"
 main() {
     wc -l $testdata
-    time th $d/$samplescript $model -beamsize $beam -verbose ${verbose:-1} -gpuid $gpu < $testdata > $output
     set -x
+    time th $d/$samplescript $model -beamsize $beam -verbose ${verbose:-1} -gpuid $gpu < $testdata > $output
     time python $d/word_eval.py $gold $output
     head $output
 }

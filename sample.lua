@@ -195,6 +195,17 @@ prediction = torch.Tensor(1, #ivocab):fill(1)/(#ivocab)
 if opt.gpuid >= 0 and opt.opencl == 0 then prediction = prediction:cuda() end
 if opt.gpuid >= 0 and opt.opencl == 1 then prediction = prediction:cl() end
 
+local function concatreversed(t)
+    local r = ''
+    while t do
+        if t[0] then
+            r = t[0] .. r
+        end
+        t = t[1]
+    end
+    return r
+end
+
 if opt.stdin then
     vprint2(1, "recasing stdin (. = 10 lines, line of . = 1000 lines)")
     -- start sampling/argmaxing
@@ -227,7 +238,7 @@ if opt.stdin then
         beamLastChar = {}
         beamState[1] = clone_state(current_state)
         beamScore[1] = 0
-        beamString[1] = ''
+        beamString[1] = nil
         vprint2(3, '#chars to process = ', #chars)
         lineno = lineno + 1
         vdot(1, lineno)
@@ -255,8 +266,7 @@ if opt.stdin then
                 current_state = vv
                 current_score = beamScore[cc]
 
-                strlen = utf8.len(current_str)
-                if strlen > 0 then
+                if current_str then
                     local vbb = beamLastChar[cc]
                     prev_char = torch.Tensor{vbb}
                     prev_chars[cnt] = vbb
@@ -311,7 +321,7 @@ if opt.stdin then
                         ch = uc
                     end
                     this_char = assert(torch.Tensor{vch})
-                    newstr = current_str .. ch
+                    newstr = {[0] = ch, [1] = current_str}
                     if jj == 2 and firstcap then
                         firstcap = false
                         current_score = current_score + opt.bonusfirstcap
@@ -369,7 +379,7 @@ if opt.stdin then
         end
         if lineagain == nil then
             vprint2(2, best, "(1-best); ", threshold, "(", beamsize, "-best)")
-            io.write(beststr)
+            io.write(concatreversed(beststr))
             io.flush()
         end
     end
