@@ -317,9 +317,14 @@ if opt.stdin then
                     if jj == 2 then
                         vch = vuc
                         ch = uc
+                        --newstr = {table.unpack(newstr)}
+                        --newstr[#newstr] = ch
+                    -- else
+                    --    newstr = current_str
+                    --    table.insert(newstr, ch)
                     end
-                    this_char = assert(torch.Tensor{vch})
                     newstr = {ch, current_str}
+                    this_char = assert(torch.Tensor{vch})
                     if jj == 2 and firstcap then
                         firstcap = false
                         current_score = current_score + opt.bonusfirstcap
