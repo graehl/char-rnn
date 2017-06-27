@@ -7,13 +7,50 @@ require './misc.lua'
 local CharSplitLMMinibatchLoader = {}
 CharSplitLMMinibatchLoader.__index = CharSplitLMMinibatchLoader
 
-function assertTorchIndices(t, n)
-    assert(torch.all(torch.cmin(torch.ge(t, 1), torch.le(t, n))))
+function strvocab(indices, ivocab, from, to)
+    local t = {}
+    for i = from, to do
+        local id = indices[i]
+        --print('['..i..']='..id..' => '..ivocab[id])
+        table.insert(t, ivocab[id])
+    end
+    return table.concat(t)
 end
 
-function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, split_fractions, min_freq)
-    -- split_fractions is e.g. {0.9, 0.05, 0.05}
+function wholestrvocab(indices, ivocab)
+    return strvocab(indices, ivocab, 1, indices:size(1))
+end
 
+function assertTorchIndices(tensor, max, chunk, name, ivocab)
+    -- assert(torch.all(torch.cmin(torch.ge(s, 1), torch.le(s, max)))) - ran oom doing this
+    -- instead: chunkwise
+    local t = torch.view(tensor, -1)
+    local sz = t:size(1)
+    local from = 1
+    while from <= sz do
+        local to = from + chunk - 1
+        if to > sz then
+            to = sz
+        end
+        local lens = to - from + 1
+        local s = t:sub(from, to)
+        local check = torch.ge(s, 1)
+        local le = torch.le(s, max)
+        check:cmin(le)
+        assert(torch.all(check))
+        from = to + 1
+    end
+end
+
+function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, split_fractions, min_freq, over255, maxvocab, outivocab)
+    -- split_fractions is e.g. {0.9, 0.05, 0.05}
+    if not over255 and maxvocab >= 256 then
+        print('WARNING: -over255 0 and -maxvocab '..maxvocab..' disagree. reducing maxvocab to 255.')
+        maxvocab = 255
+    end
+    if maxvocab <= 255 then
+        over255 = false
+    end
     local self = {}
     setmetatable(self, CharSplitLMMinibatchLoader)
 
@@ -26,18 +63,18 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
     val_data = true
     local val_input_file = path.join(data_dir, 'val_input.txt')
     local val_tensor_file = path.join(data_dir, 'val_data.t7')
-    if not (path.exists(val_input_file)) then
+    if not path.exists(val_input_file) then
         self.has_val_data = false
     end
 
     -- fetch file attributes to determine if we need to rerun preprocessing
     local run_prepro = false
-    local trainvocab = nil
+    local vocab = nil
     local traindata = nil
     local valdata = nil
-    if not (path.exists(vocab_file) or path.exists(tensor_file)) then
+    if not (path.exists(vocab_file) and path.exists(tensor_file)) then
         -- prepro files do not exist, generate them
-        print('vocab.t7 and data.t7 do not exist. Running preprocessing...')
+        print('.t7 do not exist. Running preprocessing...')
         run_prepro = true
     else
         -- check if the input file was modified since last time we
@@ -50,36 +87,37 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
             run_prepro = true
         end
     end
+    run_prepro = run_prepro or self.has_val_data and not path.exists(val_tensor_file)
     if run_prepro then
         -- construct a tensor with all the data, and vocab file
         print('one-time setup: preprocessing input text file ' .. input_file .. '...')
-        trainvocab, traindata = assert(CharSplitLMMinibatchLoader.text_to_tensor(input_file, vocab_file, tensor_file, min_freq, trainvocab))
+        vocab, traindata = CharSplitLMMinibatchLoader.text_to_tensor(input_file, vocab_file, tensor_file, min_freq, vocab, over255, maxvocab)
+        assert(vocab)
+        assert(traindata)
         -- rhs: tensor with val data
         if self.has_val_data then
-            _, valdata = CharSplitLMMinibatchLoader.text_to_tensor(val_input_file, nil, val_tensor_file, min_freq, trainvocab)
+            _, valdata = CharSplitLMMinibatchLoader.text_to_tensor(val_input_file, nil, val_tensor_file, min_freq, vocab, over255, maxvocab)
         end
     end
 
     print('loading data files...')
     local data = traindata or torch.load(tensor_file)
-    self.vocab_mapping = trainvocab or torch.load(vocab_file)
-
-    -- count vocab
-    nv = 0
-    for _ in pairs(self.vocab_mapping) do
-        nv = nv + 1
-    end
-
-    assert(nv >= 2)
-    self.vocab_size = nv
+    vocab = vocab or torch.load(vocab_file)
+    self.vocab = vocab
 
     -- cut off the end so that it divides evenly
     local len = data:size(1)
     local multiples = batch_size * seq_length
+    local ivocab, nv = invertTable(vocab)
+    if outivocab then
+        outivocab:write(table.concat(ivocab))
+    end
+    assert(nv >= 2)
+    self.vocab_size = nv
     if len % (batch_size * seq_length) ~= 0 then
         print('cutting off end of data so that the batches/sequences divide evenly')
         data = data:sub(1, multiples * math.floor(len / multiples))
-        assertTorchIndices(data, nv)
+        assertTorchIndices(data, nv, 100, "training", ivocab)
     end
 
     local val_data
@@ -92,7 +130,7 @@ function CharSplitLMMinibatchLoader.create(data_dir, batch_size, seq_length, spl
             print('cutting off end of data so that the batches/sequences divide evenly')
             val_data = val_data:sub(1, batch_size * seq_length
                                         * math.floor(len / multiples))
-            assertTorchIndices(val_data, nv)
+            assertTorchIndices(val_data, nv, 100, "validation", ivocab)
         end
     end
 
@@ -190,7 +228,31 @@ function CharSplitLMMinibatchLoader:next_batch(split_index)
     end
 end
 
-local UNK = "<unk>"
+local bytemarkers = { {0x7FF,192}, {0xFFFF,224}, {0x1FFFFF,240} }
+function utf8(decimal)
+    if decimal<128 then return string.char(decimal) end
+    local charbytes = {}
+    for bytes,vals in ipairs(bytemarkers) do
+        if decimal<=vals[1] then
+            for b=bytes+1,2,-1 do
+                local mod = decimal%64
+                decimal = (decimal-mod)/64
+                charbytes[b] = string.char(128+mod)
+            end
+            charbytes[1] = string.char(vals[2]+decimal)
+            break
+        end
+    end
+    return table.concat(charbytes)
+end
+
+function utf8frompoints(...)
+  local chars,arg={},{...}
+  for i,n in ipairs(arg) do chars[i] = utf8(arg[i]) end
+  return table.concat(chars)
+end
+
+local UNK = "\255\252" -- ff fc object replacement
 -- *** STATIC method ***
 function VisitUtf8Chars(f, unordered)
     local len = 0
@@ -199,15 +261,19 @@ function VisitUtf8Chars(f, unordered)
     while true do
         line = f:read()
         if line == nil then break end -- no more lines to read
-        for char_code, char in pairs(UTF8ToCharArray(line)) do
-            if unordered then unordered[char] = (unordered[char] or 0) + 1 end
+        local chars = UTF8ToCharArray(line)
+        for i = 1, #chars do
+            if unordered then
+                local char = chars[i]
+                unordered[char] = (unordered[char] or 0) + 1
+            end
             len = len + 1
         end
         nlines = nlines + 1
         len = len + 1
     end
     if unordered then
-        unordered[UNK] = 9999999
+        unordered[UNK] = 1e31
         unordered['\n'] = nlines
     end
     return len
@@ -222,69 +288,82 @@ function VisitUtf8CharsOpen(filename, unordered)
 end
 
 -- *** STATIC method ***
-function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, out_tensorfile, min_freq, trainvocab)
+function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, out_tensorfile, min_freq, vocabalready, over255, maxvocab)
+    local tensorType = torch.ByteTensor
+    if over255 then tensorType = torch.ShortTensor end
     local timer = torch.Timer()
     print('loading text file...')
     local cache_len = 10000
     local len = 0
 
-    local vocab_mapping
+    local vocab
     -- create vocabulary if it doesn't exist yet
-    if trainvocab or path.exists(out_vocabfile) then
+    if vocabalready or path.exists(out_vocabfile) then
         if outvocabfile then print(out_vocabfile .. ' found') end
-        vocab_mapping = trainvocab or torch.load(out_vocabfile)
+        vocab = vocabalready or torch.load(out_vocabfile)
         len = VisitUtf8CharsOpen(in_textfile, nil)
         -- code snippets taken from http://lua-users.org/wiki/LuaUnicode
     else
         print('creating vocabulary mapping...')
         -- record all characters to a set
-        local unordered = {}
-        len = VisitUtf8CharsOpen(in_textfile, unordered)
+        local count = {}
+        len = VisitUtf8CharsOpen(in_textfile, count)
 
         local ordered = {}
         -- sort into a table (i.e. keys become 1..N)
         local allfreq = 0
-        for char, c in pairs(unordered) do
+        for char, c in pairs(count) do
             if c >= min_freq then
                 table.insert(ordered, char)
             end
             allfreq = allfreq + 1
         end
-        table.sort(ordered, function(a, b) return unordered[a] > unordered[b] end)
-        vocab_mapping = {}
+        table.sort(ordered, function(a, b) return count[a] > count[b] end)
+        vocab = {}
         -- invert `ordered` to create the char->int mapping
         for i, char in ipairs(ordered) do
-            vocab_mapping[char] = i
+            if i > maxvocab then
+                break
+            end
+            vocab[char] = i
         end
         local nkept = #ordered
         print(allfreq .. ' char types observed; ' .. nkept .. ' with count >= ' .. min_freq)
         print((allfreq - nkept) .. ' char types with count < ' .. min_freq)
         print('saving ' .. out_vocabfile)
         assert(nkept > 2)
-        torch.save(out_vocabfile, vocab_mapping)
+        torch.save(out_vocabfile, vocab)
     end
     vocab_size = 0
-    for _ in pairs(vocab_mapping) do
+    for _ in pairs(vocab) do
         vocab_size = vocab_size + 1
+    end
+    if vocab_size < 256 then
+        tensorType = torch.ByteTensor
     end
     print('vocab has ' .. vocab_size .. ' symbols including <unk> and [newline]')
     -- construct a tensor with all the data
     print('putting data into tensor...')
-    local data = torch.ByteTensor(len) -- store it into 1D first, then rearrange
+    local data = tensorType(len) -- store it into 1D first, then rearrange
     local currlen = 1
 
     local f = assert(io.open(in_textfile, "r"))
     local line
-    local VUNK = assert(vocab_mapping[UNK])
+    local VUNK = assert(vocab[UNK])
     while true do
         line = f:read()
         if line == nil then break end -- no more lines to read
-        for char_code, char in pairs(UTF8ToCharArray(line)) do
-            data[currlen] = vocab_mapping[char] or VUNK
+        local chars = UTF8ToCharArray(line)
+        for i = 1, #chars do
+            local char = chars[i]
+            data[currlen] = vocab[char] or VUNK
+            if currlen == 1 then
+                print('first char='..char..' index='..data[currlen])
+            end
             currlen = currlen + 1
         end
         -- don't forget end of line character it is excluded by f:read()
-        data[currlen] = vocab_mapping['\n']
+        data[currlen] = vocab['\n']
         currlen = currlen + 1
         if math.fmod(currlen, 10000) == 0 then
             print('read ' .. currlen .. ' / ' .. len)
@@ -295,7 +374,7 @@ function CharSplitLMMinibatchLoader.text_to_tensor(in_textfile, out_vocabfile, o
     -- save output preprocessed files
     print('saving ' .. out_tensorfile)
     torch.save(out_tensorfile, data)
-    return vocab_mapping, data
+    return vocab, data
 end
 
 return CharSplitLMMinibatchLoader

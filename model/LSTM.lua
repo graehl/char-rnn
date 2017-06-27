@@ -1,22 +1,22 @@
 --[[
-n = # of time steps unrolled?
+    n = # of time steps unrolled?
 
-config: {bn=False --enable/disable batch norm
-         ,bn_momentum=0.1 -- bn momentum
-         ,bn_eps=1e-5 -- bn epsilon
-         ,bn_affine=True -- bn learn some linear stuff
-         ,nopeep=True -- remove peephole connections p* ⊙ ct: doesn't hurt perf.
-         ,couple_input=False -- (forget) it = 1-ft (input) gate. supposedly doesn't hurt perf (task dep?).
-         ,no_input=False -- don't use it (input gate) (bad for seq->seq, ok for LM?)
-        }
+    config: {bn=False --enable/disable batch norm
+    ,bn_momentum=0.1 -- bn momentum
+    ,bn_eps=1e-5 -- bn epsilon
+    ,bn_affine=True -- bn learn some linear stuff
+    ,nopeep=True -- remove peephole connections p* ⊙ ct: doesn't hurt perf.
+    ,couple_input=False -- (forget) it = 1-ft (input) gate. supposedly doesn't hurt perf (task dep?).
+    ,no_input=False -- don't use it (input gate) (bad for seq->seq, ok for LM?)
+    }
 
-' = prev timestep
-zt = g(Wz xt + Rz yt' + bz) [g,h = tanh] usually
-it = σ(Wi xt + Ri yt' + pi ⊙ ct' + bi)
-ft = σ(Wf xt + Rf yt' + pf ⊙ ct' + bf)
-ct = it⊙zt + ft⊙ct'
-ot = σ(Wo xt + R yt' + p⊙ct + bo)
-yt = ot⊙h(ct)
+    ' = prev timestep
+    zt = g(Wz xt + Rz yt' + bz) [g,h = tanh] usually
+    it = σ(Wi xt + Ri yt' + pi ⊙ ct' + bi)
+    ft = σ(Wf xt + Rf yt' + pf ⊙ ct' + bf)
+    ct = it⊙zt + ft⊙ct'
+    ot = σ(Wo xt + R yt' + p⊙ct + bo)
+    yt = ot⊙h(ct)
 ]]--
 local LSTM = {}
 
@@ -93,25 +93,14 @@ function LSTM.lstm(input_size, rnn_size, n, dropout, config)
 
         local reshaped = nn.Reshape(4, rnn_size)(all_input_sums)
         local in_gate, forget_gate, out_gate, in_transform
-        if false then
-            -- TODO: test - does this backprop? it should avoid copying. does SplitTable avoid it too?
-            local first3 = 3 * rnn_size
-            local sigmoid_chunk = nn.Narrow(2, 1, first3)(all_input_sums)
-            sigmoid_chunk = nn.Sigmoid()(sigmoid_chunk)
-            in_gate = nn.Narrow(2, 1, rnn_size)(sigmoid_chunk)
-            forget_gate = nn.Narrow(2, rnn_size + 1, rnn_size)(sigmoid_chunk)
-            out_gate = nn.Narrow(2, 2 * rnn_size + 1, rnn_size)(sigmoid_chunk)
-            in_transform = nn.Tanh()(nn.Narrow(2, first3 + 1, rnn_size)(all_input_sums))
-        else
-            -- decode the gates
-            local n1, n2, n3, n4 = nn.SplitTable(2)(reshaped):split(4)
-            in_gate = nn.Sigmoid()(n1)
-            forget_gate = nn.Sigmoid()(n2)
-            out_gate = nn.Sigmoid()(n3)
-            -- decode the write inputs
-            in_transform = nn.Tanh()(n4)
-            -- perform the LSTM update
-        end
+        -- decode the gates
+        local n1, n2, n3, n4 = nn.SplitTable(2)(reshaped):split(4)
+        in_gate = nn.Sigmoid()(n1)
+        forget_gate = nn.Sigmoid()(n2)
+        out_gate = nn.Sigmoid()(n3)
+        -- decode the write inputs
+        in_transform = nn.Tanh()(n4)
+        -- perform the LSTM update
         local next_c = nn.CAddTable()({
                 nn.CMulTable()({forget_gate, prev_c}),
                 nn.CMulTable()({in_gate, in_transform})

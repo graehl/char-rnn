@@ -37,16 +37,21 @@ local eps = config.eps or 1e-6
 local wd = config.weightDecay or 0
 
 cmd:option('-data_dir','data/tinyshakespeare','data directory. Should contain the file input.txt with input data')
-cmd:option('-min_freq',10,'treat as unk any chars w/ count below this')
+cmd:option('-min_freq',50,'treat as unk any chars w/ count below this')
+cmd:option('-over255',1,'allow for over 255 distinct characters (suggest aggressively language-filtering and unicode normalizing instead if possible - the resulting model will be better. this is for ~chinese mainly)')
+cmd:option('-maxvocab',255,'limit character inventory to the top [this many] chars including unk and newline. if under 256 then the over255 option is irrelevant (i.e. only one byte is used)')
+cmd:option('-vocabout','','if nonempty, file that the vocab chars are written to in order of vocab index. the unk char will be written U+FFFC ("object replacement character")')
+
 -- model params
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm,gru or rnn (recommend lstm)')
 cmd:option('-bn', 0, 'batch normalization for LSTM')
 cmd:option('-nopeep', 0, '-model lstm: disable peepholes')
-cmd:option('-couple_input', 0, '-model lstm: set input gate = 1 - forget')
-cmd:option('-no_input', 0, '-model lstm: no input gate')
-
+cmd:option('-couple_input', 0, 'TODO: -model lstm: set input gate = 1 - forget')
+cmd:option('-no_input', 0, 'TODO: -model lstm: no input gate')
+cmd:option('-forget_bias', 1.3, 'recommended >= 1 so you "learn to forget"')
+cmd:option('-forget_bias_plusminus', 0.3, 'forget_bias plus or minus this random uniform')
 cmd:option('-bn_eps', 1e-5, '-bn: epsilon')
 cmd:option('-bn_momentum', 0.1, '-bn: momentum')
 cmd:option('-bn_affine', 1, '-bn: affine (boolean)')
@@ -197,9 +202,10 @@ if opt.gpuid >= 0 and opt.opencl == 1 then
 end
 
 -- create the data loader class
-local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes, opt.min_freq)
+local vocabout = opt.vocabout and opt.vocabout ~= '' and assert(io.open(opt.vocabout, "wb"))
+local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes, opt.min_freq, opt.over255, opt.maxvocab, vocabout)
 local vocab_size = loader.vocab_size -- the number of distinct characters
-local vocab = loader.vocab_mapping
+local vocab = loader.vocab
 print('vocab size: ' .. vocab_size)
 -- make sure output directory exists
 if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
@@ -278,7 +284,9 @@ if opt.model == 'lstm' then
                 print('setting forget gate biases to 1 in LSTM layer ' .. layer_idx)
                 -- the gates are, in order, i,f,o,g, so f is the 2nd block of weights
                 forget_biases = node.data.module.bias[{{opt.rnn_size+1, 2*opt.rnn_size}}]
-                forget_biases:uniform(1.1, 1.5) -- don't forget until you give remembering a chance
+                local m = opt.forget_bias
+                local d = opt.forget_bias_plusminus
+                forget_biases:uniform(m - d , m + d) -- don't forget until you give remembering a chance
                 -- http://jmlr.org/proceedings/papers/v37/jozefowicz15.pdf - and
                 -- if you didn't already learn a bias, a constant bias of 1
                 -- would be useful (for forget gates only).
@@ -423,7 +431,7 @@ end
 
 local adadelta = false0(opt.adadelta)
 local adam = false0(opt.adam)
-local nag = false0(opt.nag)
+local usenag = false0(opt.nag)
 local rmsprop = not (adadelta or adam or nag)
 for i = 1, iterations do
     local epoch = i / loader.ntrain
@@ -434,7 +442,7 @@ for i = 1, iterations do
         _, loss = optim.adadelta(feval, params, adaconfig, adastate)
     elseif adam then
         _, loss = optim.adam(feval, params, adamconfig, adamstate)
-    elseif nag then
+    elseif usenag then
         _, loss = nag(feval, params, nagconfig, nagstate)
     else
         assert(rmsprop)
@@ -484,7 +492,7 @@ for i = 1, iterations do
         checkpoint.val_losses = val_losses
         checkpoint.i = i
         checkpoint.epoch = epoch
-        checkpoint.vocab = loader.vocab_mapping
+        checkpoint.vocab = loader.vocab
         torch.save(savefile, checkpoint)
     end
 

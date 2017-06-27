@@ -8,6 +8,8 @@ echo $model $size
 main() {
     rm -f $cv_dir/*
     time th $d/train.lua \
+         -min_freq ${minfreq:=50} \
+         -maxvocab ${maxvocab:-255} \
          -data_dir $data \
          -model $model \
          -rnn_size $rnn \

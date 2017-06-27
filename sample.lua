@@ -152,12 +152,7 @@ protos.rnn:evaluate() -- put in eval mode so that dropout works properly
 
 -- initialize the vocabulary (and its inverted version)
 local vocab = checkpoint.vocab
-local ivocab = {}
-local nvocab = 0
-for c,i in pairs(vocab) do
-    ivocab[i] = c
-    nvocab = nvocab + 1
-end
+local ivocab, nvocab = invertTable(vocab)
 for i = 1,#ivocab do
     vprint2(2, ivocab[i], ' ', i)
 end

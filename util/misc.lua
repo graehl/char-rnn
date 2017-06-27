@@ -1,5 +1,16 @@
 -- misc utilities
 
+function invertTable(vocab)
+    local ivocab = {}
+    local nvocab = 0
+    for c,i in pairs(vocab) do
+        -- print("invertTable["..i.."]="..c)
+        ivocab[i] = c
+        nvocab = nvocab + 1
+    end
+    return ivocab, nvocab
+end
+
 function clone_list(tensor_list, zero_too)
     -- utility function. todo: move away to some utils file?
     -- takes a list of tensors and returns a list of cloned tensors
